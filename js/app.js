@@ -9,6 +9,10 @@
  *    });
  *
  *  y quitan "fase" del elemento correspondiente en MENU.
+ *
+ *  Fase 4: App.refrescarContexto(), App.colorValido(), App.textoSobre().
+ *  ADMIN_GENERAL, ADMINISTRADOR y CONTADOR ven todas las sucursales activas
+ *  de la empresa (calculado en el equipo, igual que el servidor).
  * ============================================================
  */
 (function () {
@@ -193,13 +197,22 @@
   const App = {
     MENU: MENU, ROLES: { AG, ADM, ALM, VEN, CON }, NOMBRE_ROL: NOMBRE_ROL,
     ico: ico, aviso: aviso, modal: modal, confirmar: confirmar, cargando: cargando, urlImagen: urlImagen,
+    colorValido: colorValido, textoSobre: textoSobre,
     contexto: { empresa: null, sucursal: null, empresas: [], sucursales: [] },
 
     pantalla(id, def) { pantallas[id] = def; },
     ir(id) { location.hash = '#/' + id; },
     actual() { return (location.hash.replace(/^#\/?/, '').split('?')[0]) || 'inicio'; },
     itemMenu(id) { for (const g of MENU) for (const it of g.items) if (it.id === id) return it; return null; },
-    puede(id) { const it = App.itemMenu(id); return !it || it.roles.indexOf(Sesion.actual.rol) >= 0; }
+    puede(id) { const it = App.itemMenu(id); return !it || it.roles.indexOf(Sesion.actual.rol) >= 0; },
+
+    /** Después de cambiar empresas/sucursales: recarga empresa y sucursal activas, la barra y la pantalla. */
+    async refrescarContexto() {
+      if (!Sesion.actual || !$('#contenido')) return;
+      await cargarContexto();
+      pintarEstructura();
+      await mostrarPantalla();
+    }
   };
 
   // ============================================================
@@ -392,6 +405,19 @@
   // ============================================================
   //  EMPRESA Y SUCURSAL ACTIVAS
   // ============================================================
+  /**
+   * Sucursales activas de una empresa en las que el usuario puede trabajar.
+   * ADMIN_GENERAL, ADMINISTRADOR y CONTADOR: todas las de la empresa (igual que el servidor),
+   * así una sucursal recién creada aparece al momento. ALMACEN y VENDEDOR: solo las asignadas.
+   */
+  async function sucursalesVisibles(empresaId) {
+    const u = Sesion.actual;
+    const todas = [AG, ADM, CON].indexOf(u.rol) >= 0;
+    return (await Datos.listar('SUCURSALES', s => s.estado !== 'INACTIVO' && String(s.empresa_id) === String(empresaId) &&
+      (todas || (u.sucursales || []).indexOf(String(s.id)) >= 0)))
+      .sort((a, b) => (b.es_central === 'SI') - (a.es_central === 'SI') || String(a.nombre).localeCompare(String(b.nombre)));
+  }
+
   async function cargarContexto() {
     const u = Sesion.actual;
     const empresas = (await Datos.listar('EMPRESAS', e => e.estado !== 'INACTIVO'))
@@ -399,9 +425,7 @@
       .sort((a, b) => String(a.nombre).localeCompare(String(b.nombre)));
     let empresaId = u.rol === AG ? (u.empresa_activa || (empresas[0] && empresas[0].id) || '') : u.empresa_id;
     if (u.rol === AG && empresaId && !empresas.some(e => e.id === empresaId)) empresaId = empresas[0] ? empresas[0].id : '';
-    const todas = await Datos.listar('SUCURSALES', s => s.estado !== 'INACTIVO');
-    const sucursales = todas.filter(s => (u.sucursales || []).indexOf(String(s.id)) >= 0 && String(s.empresa_id) === String(empresaId))
-      .sort((a, b) => (b.es_central === 'SI') - (a.es_central === 'SI') || String(a.nombre).localeCompare(String(b.nombre)));
+    const sucursales = await sucursalesVisibles(empresaId);
     let sucId = u.sucursal_activa;
     if (!sucursales.some(s => s.id === sucId)) sucId = sucursales[0] ? sucursales[0].id : '';
     if (sucId !== u.sucursal_activa || (u.rol === AG && empresaId !== u.empresa_activa)) {
@@ -427,15 +451,10 @@
   function elegirContexto() {
     const u = Sesion.actual;
     const ctx = App.contexto;
-    const opcionesSuc = async empresaId => {
-      const todas = await Datos.listar('SUCURSALES', s => s.estado !== 'INACTIVO');
-      return todas.filter(s => (u.sucursales || []).indexOf(String(s.id)) >= 0 && String(s.empresa_id) === String(empresaId))
-        .sort((a, b) => (b.es_central === 'SI') - (a.es_central === 'SI') || String(a.nombre).localeCompare(String(b.nombre)));
-    };
     const pintarSuc = (lista, sel) => lista.length
       ? lista.map(s => '<option value="' + esc(s.id) + '"' + (s.id === sel ? ' selected' : '') + '>' + esc(s.nombre) +
         (s.es_central === 'SI' ? ' (Central)' : '') + '</option>').join('')
-      : '<option value="">— Sin sucursales asignadas —</option>';
+      : '<option value="">— Sin sucursales —</option>';
     const f = modal({
       titulo: 'Dónde está trabajando',
       html: (u.rol === AG ? '<div class="campo"><label for="xEmp">Empresa</label><select class="entrada" id="xEmp">' +
@@ -452,7 +471,7 @@
       } }]
     });
     const sEmp = $('#xEmp', f);
-    if (sEmp) sEmp.onchange = async () => { $('#xSuc', f).innerHTML = pintarSuc(await opcionesSuc(sEmp.value), ''); };
+    if (sEmp) sEmp.onchange = async () => { $('#xSuc', f).innerHTML = pintarSuc(await sucursalesVisibles(sEmp.value), ''); };
   }
 
   // ============================================================
@@ -604,13 +623,22 @@
         if (['inicio', 'cuenta', 'sincronizacion'].indexOf(it.id) < 0 && it.roles.indexOf(u.rol) >= 0) accesos.push(it);
       }));
 
+      let sinSucursal = '';
+      if (!ctx.sucursal) {
+        if (u.rol === AG && !ctx.empresas.length) {
+          sinSucursal = 'Todavía no hay empresas. <a href="#/empresas"><b>Cree la primera empresa aquí</b></a> (se crea junto con su sucursal central).';
+        } else if (u.rol === AG || u.rol === ADM) {
+          sinSucursal = 'Esta empresa no tiene sucursales activas. <a href="#/sucursales"><b>Créelas en Sucursales</b></a>.';
+        } else {
+          sinSucursal = 'No tiene una sucursal asignada en esta empresa. Pida al administrador que le asigne una.';
+        }
+      }
+
       el.innerHTML =
         '<div class="titulo"><div><h1>' + saludo + ', ' + esc(String(u.nombre || '').split(' ')[0]) + '</h1>' +
         '<p>' + esc(NOMBRE_ROL[u.rol]) + (ctx.empresa ? ' · ' + esc(ctx.empresa.nombre) : '') + '</p></div>' +
         (instalar ? '<button class="btn btn-principal" id="bInstalar">' + ico('install') + 'Instalar app</button>' : '') + '</div>' +
-        (!ctx.sucursal ? '<div class="msg msg-aviso">' + (u.rol === AG && !ctx.empresas.length
-          ? 'Todavía no hay empresas cargadas. Se crean en la Fase 4 (o directamente en la hoja EMPRESAS / SUCURSALES).'
-          : 'No tiene una sucursal asignada en esta empresa. Pida al administrador que le asigne una.') + '</div>' : '') +
+        (sinSucursal ? '<div class="msg msg-aviso">' + sinSucursal + '</div>' : '') +
         '<div class="rejilla bloque">' +
         '<div class="tarjeta"><h3>' + ico('store') + 'Trabajando en</h3>' +
         '<div class="dato"><span>Empresa</span><b>' + esc(ctx.empresa ? ctx.empresa.nombre : '—') + '</b></div>' +
