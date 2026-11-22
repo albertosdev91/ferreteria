@@ -215,3 +215,74 @@ table.tabla { width: 100%; border-collapse: collapse; font-size: 14px; }
 .giro { width: 42px; height: 42px; border-radius: 50%; border: 4px solid rgba(255, 255, 255, .2); border-top-color: var(--naranja); animation: gira .9s linear infinite; }
 @keyframes gira { to { transform: rotate(360deg); } }
 .cargando p { margin: 0; max-width: 340px; color: rgba(255, 255, 255, .85); }
+
+/* ============================================================
+   FASE 4 — formularios, filtros, empresas, sucursales, usuarios
+   ============================================================ */
+.modal.ancho { max-width: 720px; }
+.form-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; }
+.form-2 > .todo, .form-2 > .msg { grid-column: 1 / -1; }
+@media (max-width: 599px) { .form-2 { grid-template-columns: 1fr; } }
+.seccion-form {
+  grid-column: 1 / -1; margin: 4px 0 12px; padding-top: 12px; border-top: 1px solid var(--borde);
+  font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; color: var(--suave);
+}
+.form-2 > .seccion-form:first-child { border-top: 0; padding-top: 0; }
+.req { color: var(--rojo); }
+.nota { margin: -4px 0 12px; font-size: 13.5px; color: var(--suave); line-height: 1.45; }
+.mono { font-family: ui-monospace, "SF Mono", Consolas, "Liberation Mono", monospace; letter-spacing: .04em; }
+.entrada[readonly] { background: #f4f5f8; color: var(--suave); }
+textarea.entrada { resize: vertical; min-height: 64px; }
+
+/* Filtros arriba de las listas */
+.filtros { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; align-items: flex-end; }
+.filtros .campo { margin: 0; flex: 1 1 200px; }
+.filtros .campo.corto { flex: 0 1 170px; }
+
+/* Casillas grandes (fáciles de tocar en el celular) */
+.check {
+  display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; min-height: 46px; cursor: pointer;
+  border: 1px solid var(--borde); border-radius: 10px; background: #fff; font-weight: 400 !important; color: var(--texto) !important;
+}
+.check input { width: 19px; height: 19px; margin: 1px 0 0; accent-color: var(--azul); flex: none; }
+.check b { display: block; font-size: 14px; color: var(--azul); }
+.check small { display: block; font-size: 12.5px; color: var(--suave); margin-top: 2px; }
+.check:has(input:checked) { border-color: var(--naranja); background: #fff8ee; }
+.check:has(input:disabled) { cursor: default; opacity: .8; }
+.checks { display: grid; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); }
+
+/* Colores de la empresa */
+.color-par { display: flex; gap: 8px; align-items: center; }
+.color-par input[type=color] {
+  width: 54px; height: 46px; padding: 3px; flex: none; cursor: pointer;
+  border: 1px solid #cfd3e0; border-radius: 10px; background: #fff;
+}
+.vista-barra { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px 10px 0 0; background: var(--azul); color: #fff; }
+.vista-barra img { width: 38px; height: 38px; border-radius: 8px; object-fit: contain; background: #fff; flex: none; }
+.vista-barra b { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vista-barra small { display: block; font-size: 12px; opacity: .85; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vista-linea { height: 5px; border-radius: 0 0 10px 10px; background: var(--naranja); }
+
+/* Tarjetas de empresa */
+.emp-lista { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
+.emp-tarjeta { padding: 0; overflow: hidden; display: flex; flex-direction: column; }
+.emp-tarjeta .banda { display: flex; align-items: center; gap: 12px; padding: 14px 16px; }
+.emp-tarjeta .banda img { width: 46px; height: 46px; border-radius: 10px; object-fit: contain; background: #fff; flex: none; }
+.emp-tarjeta .banda b { display: block; font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.emp-tarjeta .banda small { display: block; font-size: 12.5px; opacity: .85; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.emp-tarjeta .linea { height: 4px; }
+.emp-tarjeta .cuerpo-t { padding: 8px 16px 12px; flex: 1; }
+.emp-tarjeta .acciones { display: flex; gap: 8px; flex-wrap: wrap; padding: 0 16px 16px; }
+.emp-tarjeta.apagada .banda { filter: grayscale(.85); opacity: .75; }
+
+/* Filas de tablas */
+.tabla .sub { display: block; font-size: 12.5px; color: var(--suave); margin-top: 2px; }
+.tabla td.acc { white-space: nowrap; text-align: right; }
+.acciones-fila { display: inline-flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.tabla tr.inactivo td { color: var(--suave); }
+.tabla tr.inactivo td b { color: var(--suave); }
+a.etiqueta { text-decoration: none; }
+
+/* Datos de acceso de un usuario nuevo */
+.credenciales { border: 1px solid var(--borde); border-radius: 10px; padding: 4px 12px; margin-bottom: 12px; background: #fafbfd; }
+.credenciales .mono { font-size: 17px; color: var(--azul); }
