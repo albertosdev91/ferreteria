@@ -417,3 +417,8 @@ button.tile:hover { border-color: var(--naranja); }
 .esc-botones .btn { flex: 1; }
 .esc-manual { display: flex; gap: 8px; margin-top: 10px; }
 .esc-manual .entrada { flex: 1; color: var(--texto); }
+
+/* Fase 5.1 — subir imágenes, ayudas en etiquetas */
+.img-fila .btn-principal { flex: none; min-height: 46px; padding: 0 14px; }
+@media (max-width: 420px) { .img-fila .btn-principal span { display: none; } }
+.campo label small { font-weight: 400; }
