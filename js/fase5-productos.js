@@ -53,6 +53,8 @@
   const manejaSucursal = () => [AG, ADM, ALM].indexOf(rol()) >= 0;
   const porNombre = (a, b) => txt(a.nombre).localeCompare(txt(b.nombre), 'es');
   const precio = v => n0(v) > 0 ? U.bs(v) : '<span class="suave">—</span>';
+  /** Usos / profesiones de un producto (columna "usos": códigos separados por coma). */
+  const usosDe = p => txt(p && p.usos).split(',').map(x => x.trim()).filter(Boolean);
 
   // Íconos de esta fase
   const ICO5 = {
@@ -184,10 +186,12 @@
 
   async function cargar() {
     if (cache) return cache;
-    const [productos, marcas, categorias, imagenes, archivos] = await Promise.all([
+    const [productos, marcas, categorias, imagenes, archivos, usosLista] = await Promise.all([
       Datos.listar('PRODUCTOS'), Datos.listar('MARCAS'), Datos.listar('CATEGORIAS'), Datos.listar('PRODUCTO_IMAGENES', activo),
-      Datos.listar('ARCHIVOS', activo)
+      Datos.listar('ARCHIVOS', activo), Datos.listar('LISTAS', l => l.lista === 'USO')
     ]);
+    usosLista.sort((a, b) => n0(a.orden) - n0(b.orden) || txt(a.nombre).localeCompare(txt(b.nombre), 'es'));
+    const usoPorCod = new Map(usosLista.map(u => [String(u.codigo), u]));
     productos.sort((a, b) => (a.estado === 'INACTIVO') - (b.estado === 'INACTIVO') || porNombre(a, b));
     const porId = new Map(productos.map(p => [String(p.id), p]));
     const marcaPorId = new Map(marcas.map(m => [String(m.id), m]));
@@ -226,7 +230,8 @@
     cache = {
       productos: productos, porId: porId, marcas: marcas, categorias: categorias, marcaPorId: marcaPorId, catPorId: catPorId,
       codigos: codigos, internos: internos, texto: texto, indice: indice, imagenes: imgs, rutas: rutas, rutaCategoria: rutaCategoria,
-      nombreMarca: id => { const m = marcaPorId.get(String(id)); return m ? m.nombre : ''; }
+      nombreMarca: id => { const m = marcaPorId.get(String(id)); return m ? m.nombre : ''; },
+      usos: usosLista, nombreUso: cod => { const u = usoPorCod.get(String(cod)); return u ? u.nombre : cod; }
     };
     return cache;
   }
@@ -274,6 +279,7 @@
       if (op.ids && !op.ids.has(String(p.id))) continue;
       if (op.categorias && !op.categorias.has(String(p.categoria_id))) continue;
       if (op.marca && !mismo(p.marca_id, op.marca)) continue;
+      if (op.uso && usosDe(p).indexOf(op.uso) < 0) continue;
       let ok = true;
       for (let j = 0; j < palabras.length; j++) if (x.t.indexOf(palabras[j]) < 0) { ok = false; break; }
       if (!ok) continue;
@@ -464,7 +470,7 @@
   // ============================================================
   //  PANTALLA: CATÁLOGO GENERAL (solo ADMIN_GENERAL)
   // ============================================================
-  const fCat = { buscar: '', categoria: '', marca: '', estado: 'ACTIVO', limite: 50 };
+  const fCat = { buscar: '', categoria: '', marca: '', uso: '', estado: 'ACTIVO', limite: 50 };
 
   App.pantalla('catalogo', {
     refrescar: true,
@@ -486,6 +492,7 @@
         '<div class="acciones-fila"><button class="btn btn-borde" data-acc="categorias">' + icoX('etiqueta') + 'Categorías</button>' +
         '<button class="btn btn-borde" data-acc="marcas">' + icoX('etiqueta') + 'Marcas</button>' +
         '<button class="btn btn-borde" data-acc="unidades">' + icoX('etiqueta') + 'Unidades</button>' +
+        '<button class="btn btn-borde" data-acc="usos">' + icoX('etiqueta') + 'Usos / profesiones</button>' +
         '<button class="btn btn-principal" data-acc="nuevo">' + icoX('mas') + 'Nuevo producto</button></div></div>' +
         '<div class="filtros">' +
         '<div class="campo"><label for="catBuscar">Buscar <small class="suave">(después de una coma: marca)</small></label>' +
@@ -494,6 +501,7 @@
         lista('catCat', [['', 'Todas']].concat(arbolCategorias(c, { inactivas: true }).map(x => [x[0], x[1]])), fCat.categoria) + '</div>' +
         '<div class="campo corto"><label for="catMarca">Marca</label>' +
         lista('catMarca', [['', 'Todas']].concat(c.marcas.slice().sort(porNombre).map(m => [m.id, m.nombre + (activo(m) ? '' : ' (inactiva)')])), fCat.marca) + '</div>' +
+        '<div class="campo corto"><label for="catUso">Uso / profesión</label>' + lista('catUso', opcionesUsos(c), fCat.uso) + '</div>' +
         '<div class="campo corto"><label for="catEstado">Mostrar</label>' +
         lista('catEstado', [['ACTIVO', 'Activos'], ['INACTIVO', 'Inactivos'], ['TODOS', 'Todos']], fCat.estado) + '</div></div>' +
         '<div id="catLista"></div>';
@@ -504,7 +512,7 @@
       const pintar = async () => {
         const vista = (await buscar(fCat.buscar, {
           inactivos: true,
-          categorias: fCat.categoria ? descendientes(c, fCat.categoria) : null,
+          categorias: fCat.categoria ? descendientes(c, fCat.categoria) : null, uso: fCat.uso,
           marca: fCat.marca
         })).filter(p => fCat.estado === 'TODOS' || (fCat.estado === 'INACTIVO') === (p.estado === 'INACTIVO'));
         const cont = $('#catLista', raiz);
@@ -533,6 +541,7 @@
               '<td><b>' + esc(p.codigo) + '</b></td>' +
               '<td><b>' + esc(p.nombre) + '</b>' + etiquetaEnvio(pend[p.id]) +
               '<span class="sub">' + esc([c.nombreMarca(p.marca_id), c.rutaCategoria(p.categoria_id)].filter(Boolean).join(' · ') || 'Sin marca ni categoría') + '</span>' +
+              (usosDe(p).length ? '<span class="sub">' + usosDe(p).map(u => '<span class="etiqueta uso">' + esc(c.nombreUso(u)) + '</span>').join(' ') + '</span>' : '') +
               (barras ? '<span class="sub mono">' + esc(barras) + '</span>' : '') + '</td>' +
               '<td>' + esc(p.unidad || '—') + '</td><td>' + esc(emp || '—') + '</td>' +
               '<td class="num">' + (nSuc.get(String(p.id)) || 0) + '</td>' +
@@ -557,6 +566,7 @@
       };
       $('#catCat', raiz).onchange = e => { fCat.categoria = e.target.value; fCat.limite = 50; pintar(); };
       $('#catMarca', raiz).onchange = e => { fCat.marca = e.target.value; fCat.limite = 50; pintar(); };
+      $('#catUso', raiz).onchange = e => { fCat.uso = e.target.value; fCat.limite = 50; pintar(); };
       $('#catEstado', raiz).onchange = e => { fCat.estado = e.target.value; fCat.limite = 50; pintar(); };
 
       raiz.onclick = async ev => {
@@ -571,7 +581,8 @@
           case 'estado': return cambiarEstadoProducto(p, nSuc.get(String(p.id)) || 0);
           case 'categorias': return gestionarMaestro('CATEGORIAS');
           case 'marcas': return gestionarMaestro('MARCAS');
-          case 'unidades': return gestionarUnidades();
+          case 'unidades': return gestionarLista(LISTA_CFG.UNIDAD);
+          case 'usos': return gestionarLista(LISTA_CFG.USO);
           case 'mas': fCat.limite += 100; return pintar();
         }
       };
@@ -597,11 +608,27 @@
     return 'P' + String(n + 1).padStart(5, '0');
   }
 
+  /** Opciones para filtros: [['', 'Todos'], [codigo, nombre]…] */
+  function opcionesUsos(c, todos) {
+    return [['', todos || 'Todos']].concat(c.usos.filter(activo).map(u => [u.codigo, u.nombre]));
+  }
+  function opcionesMarcasFiltro(c) {
+    return [['', 'Todas']].concat(c.marcas.filter(activo).sort(porNombre).map(m => [m.id, m.nombre]));
+  }
+
   function opcionesMarcas(c, sel) {
     return [['', '— Sin marca —']].concat(c.marcas.filter(m => activo(m) || mismo(m.id, sel)).sort(porNombre).map(m => [m.id, m.nombre]));
   }
   function opcionesCategorias(c, sel) {
     return [['', '— Sin categoría —']].concat(arbolCategorias(c, { incluir: sel }).map(x => [x[0], x[1]]));
+  }
+
+  function checksUsos(c, marcados) {
+    const lista2 = c.usos.filter(u => activo(u) || marcados.indexOf(u.codigo) >= 0);
+    return lista2.map(u => '<label class="chip-check"><input type="checkbox" name="pUso" value="' + esc(u.codigo) + '"' +
+      (marcados.indexOf(u.codigo) >= 0 ? ' checked' : '') + '><span>' + esc(u.nombre) + '</span></label>').join('') +
+      '<button type="button" class="chip-check nuevo" data-nuevo-uso>' + icoX('mas') + 'Nuevo uso</button>' +
+      (!lista2.length ? '<span class="ayuda">Todavía no hay usos. Créelos con "Nuevo uso" o en el botón <b>Usos / profesiones</b> del catálogo.</span>' : '');
   }
 
   function filaImagen(url, id) {
@@ -638,6 +665,8 @@
       '<div class="campo"><label for="pCategoria">Categoría</label><div class="con-mas">' + lista('pCategoria', opcionesCategorias(c, p.categoria_id), p.categoria_id || '') +
       '<button type="button" class="btn btn-borde" data-nueva="CATEGORIAS" title="Crear categoría" aria-label="Crear categoría">' + icoX('mas') + '</button></div></div>' +
 
+      '<div class="campo todo"><label>Usos / profesiones <small class="suave">(puede marcar varios)</small></label>' +
+      '<div class="usos-checks" id="pUsos">' + checksUsos(c, usosDe(p)) + '</div></div>' +
       '<div class="seccion-form">Códigos de barras</div>' +
       '<p class="nota todo">Con <b>lector USB</b>: toque el campo y escanee. Con el <b>celular</b>: botón de cámara. Puede dejarlos vacíos.</p>' +
       campo('pBarUni', 'De la unidad', nuevo && op.codigoBarras ? op.codigoBarras : p.codigo_barras_unidad, { attrs: ' data-barras autocomplete="off" spellcheck="false"' }) +
@@ -753,6 +782,16 @@
       const u = urlDe(ev.target.value);
       $('.mini', fila).innerHTML = u ? '<img src="' + esc(u) + '" alt="" onerror="this.remove()">' : '';
     });
+    // Crear un uso / profesión sin salir del formulario
+    $('#pUsos', f).addEventListener('click', async ev => {
+      if (!ev.target.closest('[data-nuevo-uso]')) return;
+      const marcados = $$('#pUsos input[name="pUso"]:checked', f).map(i => i.value);
+      const lista2 = await leerLista('USO');
+      const cod = await editarUnidad(null, lista2, LISTA_CFG.USO);
+      if (!cod) return;
+      const c2 = await cargar();
+      $('#pUsos', f).innerHTML = checksUsos(c2, marcados.concat([cod]));
+    });
     // Crear marca / categoría sin salir del formulario
     $$('[data-nueva]', f).forEach(b => {
       b.onclick = async () => {
@@ -778,7 +817,8 @@
         marca_id: v('pMarca'), categoria_id: v('pCategoria'),
         codigo_barras_unidad: codigoLimpio(v('pBarUni')), codigo_barras_paquete: codigoLimpio(v('pBarPaq')),
         codigo_barras_caja: codigoLimpio(v('pBarCaja')),
-        descripcion: v('pDesc'), imagen_principal_url: v('pImg')
+        descripcion: v('pDesc'), imagen_principal_url: v('pImg'),
+        usos: $$('#pUsos input[name="pUso"]:checked', f).map(i => i.value).join(',')
       };
       if (!d.codigo) return mensaje(f, 'Escriba el código interno del producto.');
       if (!/^[A-Z0-9._\-\/]{1,30}$/.test(d.codigo)) return mensaje(f, 'El código interno solo puede tener letras, números, punto, guion o barra (sin espacios).');
@@ -867,30 +907,41 @@
   const UNIDADES_FERRETERIA = ['BOTE', 'COMBO', 'CTA', 'DOCENA', 'KILO', 'KIT', 'PAQUETE', 'PAR', 'ROLLO', 'SET', 'UNIDAD'];
   const UNIDAD_EQUIVALE = { UND: 'UNIDAD', KG: 'KILO', ROL: 'ROLLO', JGO: 'SET' };   // unidades antiguas → nuevas
 
-  async function gestionarUnidades() {
+  const USOS_SUGERIDOS = [['ELECTRICISTA', 'Electricista'], ['FONTANERIA', 'Fontanería / plomería'], ['CARPINTERIA', 'Carpintería'],
+    ['CONSTRUCCION', 'Albañilería / construcción'], ['PINTURA', 'Pintura'], ['SOLDADURA', 'Soldadura'], ['MECANICA', 'Mecánica automotriz'],
+    ['JARDINERIA', 'Jardinería'], ['HOGAR', 'Hogar'], ['SEGURIDAD', 'Seguridad industrial']];
+  const LISTA_CFG = {
+    UNIDAD: { lista: 'UNIDAD', titulo: 'Unidades de medida', una: 'unidad', nueva: 'Nueva unidad', ph: 'Ej. METRO', nombreIgual: true,
+      nota: 'Son las unidades en que se cuenta el stock (UNIDAD, KILO, ROLLO…). Puede agregar, renombrar u ordenar. ' +
+        'El código no se cambia porque lo usan los productos; si ya no sirve, desactívela.',
+      cuenta: (p, cod) => txt(p.unidad) === cod, sugeridos: 'Usar la lista de la ferretería', aplicar: lista => usarUnidadesFerreteria(lista) },
+    USO: { lista: 'USO', titulo: 'Usos / profesiones', una: 'uso', nueva: 'Nuevo uso', ph: 'Ej. ELECTRICISTA', nombreIgual: false,
+      nota: 'Agrupan productos por oficio o tipo de uso (Electricista, Fontanería…). Un producto puede tener varios. ' +
+        'Sirven para filtrar las búsquedas y para armar listas en PDF. El código no se cambia; el nombre sí.',
+      cuenta: (p, cod) => usosDe(p).indexOf(cod) >= 0, sugeridos: 'Cargar usos sugeridos', aplicar: lista => cargarUsosSugeridos(lista) }
+  };
+  const leerLista = async nombre => (await Datos.listar('LISTAS', l => l.lista === nombre))
+    .sort((a, b) => (a.estado === 'INACTIVO') - (b.estado === 'INACTIVO') || n0(a.orden) - n0(b.orden) || txt(a.codigo).localeCompare(txt(b.codigo)));
+
+  async function gestionarLista(cfg) {
     const f = modalAncho({
-      titulo: 'Unidades de medida',
-      html: '<p class="nota">Son las unidades en que se cuenta el stock (UNIDAD, KILO, ROLLO…). Puede agregar, renombrar u ordenar. ' +
-        'El código no se cambia porque lo usan los productos; si ya no sirve, desactívela.</p>' +
+      titulo: cfg.titulo,
+      html: '<p class="nota">' + cfg.nota + '</p>' +
         '<div class="acciones-fila" style="justify-content:flex-start;margin-bottom:12px">' +
-        '<button class="btn btn-principal" data-acc="nueva">' + icoX('mas') + 'Nueva unidad</button>' +
-        '<button class="btn btn-borde" data-acc="ferreteria">Usar la lista de la ferretería</button></div>' +
+        '<button class="btn btn-principal" data-acc="nueva">' + icoX('mas') + cfg.nueva + '</button>' +
+        '<button class="btn btn-borde" data-acc="sugeridos">' + cfg.sugeridos + '</button></div>' +
         '<div id="uLista"></div>',
       botones: [{ t: 'Cerrar', clase: 'btn-principal' }]
     });
-    const leer = async () => (await Datos.listar('LISTAS', l => l.lista === 'UNIDAD'))
-      .sort((a, b) => (a.estado === 'INACTIVO') - (b.estado === 'INACTIVO') || n0(a.orden) - n0(b.orden) || txt(a.codigo).localeCompare(txt(b.codigo)));
     const pintar = async () => {
       const c = await cargar();
-      const uso = new Map();
-      c.productos.forEach(p => uso.set(txt(p.unidad), (uso.get(txt(p.unidad)) || 0) + 1));
-      const lista = await leer();
-      $('#uLista', f).innerHTML = !lista.length ? '<p class="vacio">No hay unidades. Use "Usar la lista de la ferretería".</p>'
+      const lista2 = await leerLista(cfg.lista);
+      $('#uLista', f).innerHTML = !lista2.length ? '<p class="vacio">Todavía no hay ninguno. Use "' + cfg.sugeridos + '" o "' + cfg.nueva + '".</p>'
         : '<div class="tabla-env"><table class="tabla compacta"><thead><tr><th>Código</th><th>Nombre</th><th class="num">Orden</th>' +
           '<th class="num">Productos</th><th>Estado</th><th></th></tr></thead><tbody>' +
-          lista.map(u => '<tr' + (activo(u) ? '' : ' class="inactivo"') + '><td><b>' + esc(u.codigo) + '</b></td><td>' + esc(u.nombre) + '</td>' +
-            '<td class="num">' + esc(u.orden) + '</td><td class="num">' + (uso.get(txt(u.codigo)) || 0) + '</td>' +
-            '<td>' + etiquetaEstado(u.estado, 'Activa', 'Inactiva') + '</td>' +
+          lista2.map(u => '<tr' + (activo(u) ? '' : ' class="inactivo"') + '><td><b>' + esc(u.codigo) + '</b></td><td>' + esc(u.nombre) + '</td>' +
+            '<td class="num">' + esc(u.orden) + '</td><td class="num">' + c.productos.filter(p => cfg.cuenta(p, txt(u.codigo))).length + '</td>' +
+            '<td>' + etiquetaEstado(u.estado) + '</td>' +
             '<td class="acc"><div class="acciones-fila"><button class="btn btn-chico btn-borde" data-acc="editar" data-cod="' + esc(u.codigo) + '">Editar</button>' +
             '<button class="btn btn-chico ' + (activo(u) ? 'btn-peligro' : 'btn-borde') + '" data-acc="estado" data-cod="' + esc(u.codigo) + '">' +
             (activo(u) ? 'Desactivar' : 'Activar') + '</button></div></td></tr>').join('') + '</tbody></table></div>';
@@ -898,55 +949,73 @@
     f.addEventListener('click', async ev => {
       const b = ev.target.closest('[data-acc]');
       if (!b) return;
-      const lista = await leer();
-      const u = lista.find(x => x.codigo === b.dataset.cod);
-      if (b.dataset.acc === 'nueva' || b.dataset.acc === 'editar') { if (await editarUnidad(u, lista)) pintar(); }
+      const lista2 = await leerLista(cfg.lista);
+      const u = lista2.find(x => x.codigo === b.dataset.cod);
+      if (b.dataset.acc === 'nueva' || b.dataset.acc === 'editar') { if (await editarUnidad(u, lista2, cfg)) pintar(); }
       else if (b.dataset.acc === 'estado') {
         const c = await cargar();
-        const n = c.productos.filter(p => txt(p.unidad) === u.codigo).length;
-        if (activo(u) && n && !(await App.confirmar('Desactivar unidad', n + ' producto(s) usan ' + u.codigo +
-          '. Seguirán con esa unidad, pero ya no se podrá elegir para productos nuevos.', 'Desactivar', 'btn-peligro'))) return;
-        await Datos.guardar('LISTAS', { lista: 'UNIDAD', codigo: u.codigo, estado: activo(u) ? 'INACTIVO' : 'ACTIVO' });
+        const n = c.productos.filter(p => cfg.cuenta(p, u.codigo)).length;
+        if (activo(u) && n && !(await App.confirmar('Desactivar', n + ' producto(s) usan «' + u.nombre +
+          '». Lo conservan, pero ya no se podrá elegir para otros productos.', 'Desactivar', 'btn-peligro'))) return;
+        await Datos.guardar('LISTAS', { lista: cfg.lista, codigo: u.codigo, estado: activo(u) ? 'INACTIVO' : 'ACTIVO' });
         pintar();
-      } else if (b.dataset.acc === 'ferreteria') {
-        if (await usarUnidadesFerreteria(lista)) pintar();
+      } else if (b.dataset.acc === 'sugeridos') {
+        if (await cfg.aplicar(lista2)) pintar();
       }
     });
     pintar();
   }
 
-  function editarUnidad(u, lista) {
+  /** Crear / editar una opción de LISTAS. Devuelve el código guardado (o false). */
+  function editarUnidad(u, lista, cfg) {
+    cfg = cfg || LISTA_CFG.UNIDAD;
     return new Promise(listo => {
       const nueva = !u;
       u = u || {};
       const siguiente = lista.reduce((m, x) => Math.max(m, n0(x.orden)), 0) + 1;
       const fm = App.modal({
-        titulo: nueva ? 'Nueva unidad de medida' : 'Editar unidad ' + u.codigo,
-        html: campo('uCod', 'Código', u.codigo, { req: true, ph: 'Ej. METRO', attrs: ' maxlength="12" autocapitalize="characters" spellcheck="false"' + (nueva ? '' : ' readonly'),
-            ayuda: nueva ? 'MAYÚSCULAS y números, sin espacios. No se cambia después.' : 'El código no se cambia.' }) +
-          campo('uNom', 'Nombre', u.nombre || '', { req: true, ph: 'Ej. METRO', attrs: ' maxlength="40"' }) +
+        titulo: (nueva ? cfg.nueva : 'Editar ' + cfg.una + ' ' + u.codigo),
+        html: campo('uNom', 'Nombre', u.nombre || '', { req: true, ph: cfg.nombreIgual ? cfg.ph : 'Ej. Electricista', attrs: ' maxlength="40"' }) +
+          campo('uCod', 'Código', u.codigo, { req: true, ph: cfg.ph, attrs: ' maxlength="20" autocapitalize="characters" spellcheck="false"' + (nueva ? '' : ' readonly'),
+            ayuda: nueva ? 'Se llena solo. MAYÚSCULAS y números, sin espacios ni tildes. No se cambia después.' : 'El código no se cambia.' }) +
           campoNum('uOrden', 'Orden en la lista', nueva ? siguiente : u.orden, { ayuda: 'Número más bajo = aparece primero.' }) +
           '<div class="f-msg"></div>',
         botones: [{ t: 'Cancelar', accion: () => listo(false) }, { t: 'Guardar', clase: 'btn-principal', accion: async m => {
           try {
             const cod = txt($('#uCod', m).value).toUpperCase().replace(/\s+/g, '');
             const nom = txt($('#uNom', m).value);
-            if (!/^[A-Z0-9_-]{1,12}$/.test(cod)) return mensaje(m, 'El código debe tener de 1 a 12 MAYÚSCULAS o números, sin espacios.');
             if (!nom) return mensaje(m, 'Escriba el nombre.');
-            if (nueva && lista.some(x => x.codigo === cod)) return mensaje(m, 'La unidad ' + cod + ' ya existe (puede estar inactiva: actívela).');
+            if (!/^[A-Z0-9_-]{1,20}$/.test(cod)) return mensaje(m, 'El código debe tener de 1 a 20 MAYÚSCULAS o números, sin espacios ni tildes.');
+            if (nueva && lista.some(x => x.codigo === cod)) return mensaje(m, 'El código ' + cod + ' ya existe (puede estar inactivo: actívelo).');
+            if (lista.some(x => x.codigo !== cod && norm(x.nombre) === norm(nom))) return mensaje(m, 'Ya existe otro con el nombre «' + nom + '».');
             const orden = leerNumero(m, 'uOrden', 'el orden', { dec: 0 });
-            await Datos.guardar('LISTAS', { lista: 'UNIDAD', codigo: cod, nombre: nom, orden: orden === '' ? siguiente : orden, estado: nueva ? 'ACTIVO' : (u.estado || 'ACTIVO') });
-            App.aviso('Unidad guardada', 'ok');
-            listo(true);
+            await Datos.guardar('LISTAS', { lista: cfg.lista, codigo: cod, nombre: nom, orden: orden === '' ? siguiente : orden, estado: nueva ? 'ACTIVO' : (u.estado || 'ACTIVO') });
+            App.aviso('Guardado', 'ok');
+            listo(cod);
           } catch (e) {
             return mensaje(m, e.message || String(e));
           }
         } }]
       });
       const ic = $('#uCod', fm), inom = $('#uNom', fm);
-      if (nueva) ic.oninput = () => { ic.value = ic.value.toUpperCase().replace(/\s/g, ''); if (!inom.dataset.tocado) inom.value = ic.value; };
-      inom.oninput = () => { inom.dataset.tocado = '1'; };
+      if (nueva) {
+        ic.oninput = () => { ic.dataset.tocado = '1'; ic.value = ic.value.toUpperCase().replace(/\s/g, ''); };
+        inom.oninput = () => {
+          if (ic.dataset.tocado) return;
+          ic.value = norm(inom.value).toUpperCase().replace(/[^A-Z0-9]+/g, cfg.nombreIgual ? '' : '_').replace(/^_+|_+$/g, '').slice(0, 20);
+        };
+      }
     });
+  }
+
+  async function cargarUsosSugeridos(lista2) {
+    const faltan = USOS_SUGERIDOS.filter(([cod]) => !lista2.some(x => x.codigo === cod));
+    if (!faltan.length) { App.aviso('Los usos sugeridos ya están cargados.', 'info'); return false; }
+    if (!(await App.confirmar('Cargar usos sugeridos', 'Se agregarán: ' + faltan.map(x => x[1]).join(', ') + '. Después puede renombrarlos o desactivarlos.', 'Agregar'))) return false;
+    const base = lista2.reduce((m, x) => Math.max(m, n0(x.orden)), 0);
+    await Datos.guardarVarios(faltan.map(([cod, nom], i) => ({ tabla: 'LISTAS', fila: { lista: 'USO', codigo: cod, nombre: nom, orden: base + i + 1, estado: 'ACTIVO' } })));
+    App.aviso(faltan.length + ' uso(s) agregados', 'ok');
+    return true;
   }
 
   /** Deja activas las unidades de la ferretería; pasa UND→UNIDAD, KG→KILO, ROL→ROLLO, JGO→SET en los productos. */
@@ -1068,7 +1137,7 @@
   // ============================================================
   //  PANTALLA: PRODUCTOS DE LA SUCURSAL
   // ============================================================
-  const fPS = { buscar: '', categoria: '', vista: 'TODOS', limite: 50 };
+  const fPS = { buscar: '', categoria: '', uso: '', vista: 'TODOS', limite: 50 };
   const VISTAS_PS = [['TODOS', 'Todos los asignados'], ['BAJO', 'Stock bajo'], ['CERO', 'Sin stock'], ['ESPECIAL', 'Productos especiales'],
     ['SIN_PRECIO', 'Sin precio'], ['SIN_UBICACION', 'Sin ubicación'], ['INACTIVO', 'Desasignados']];
 
@@ -1159,6 +1228,7 @@
         '<input class="entrada" id="psBuscar" data-foco value="' + esc(fPS.buscar) + '" autocomplete="off" enterkeyhint="search" placeholder="Ej. clavo 2, truper"></div>' +
         '<div class="campo corto"><label for="psCat">Categoría</label>' +
         lista('psCat', [['', 'Todas']].concat(arbolCategorias(c).map(x => [x[0], x[1]])), fPS.categoria) + '</div>' +
+        '<div class="campo corto"><label for="psUso">Uso / profesión</label>' + lista('psUso', opcionesUsos(c), fPS.uso) + '</div>' +
         '<div class="campo corto"><label for="psVista">Mostrar</label>' + lista('psVista', VISTAS_PS, fPS.vista) + '</div></div>' +
         '<div id="psLista"></div>';
 
@@ -1176,8 +1246,11 @@
         const ids = new Set();
         const b = fPS.buscar.indexOf(',') < 0 ? norm(fPS.buscar) : '';
         const porUbic = b ? new Set(items.filter(i => norm(i.ps.ubicacion).indexOf(b) >= 0).map(i => String(i.p.id))) : null;
-        (await buscar(fPS.buscar, { inactivos: true, categorias: fPS.categoria ? descendientes(c, fPS.categoria) : null })).forEach(p => ids.add(String(p.id)));
-        if (porUbic) porUbic.forEach(id => { if (!fPS.categoria || descendientes(c, fPS.categoria).has(String(c.porId.get(id).categoria_id))) ids.add(id); });
+        (await buscar(fPS.buscar, { inactivos: true, uso: fPS.uso, categorias: fPS.categoria ? descendientes(c, fPS.categoria) : null })).forEach(p => ids.add(String(p.id)));
+        if (porUbic) porUbic.forEach(id => {
+          const pp = c.porId.get(id);
+          if ((!fPS.categoria || descendientes(c, fPS.categoria).has(String(pp.categoria_id))) && (!fPS.uso || usosDe(pp).indexOf(fPS.uso) >= 0)) ids.add(id);
+        });
         const filtro = {
           TODOS: i => i.activo, BAJO: i => i.activo && i.bajo, CERO: i => i.activo && i.cero, ESPECIAL: i => i.activo && i.especial,
           SIN_PRECIO: i => i.activo && i.sinPrecio, SIN_UBICACION: i => i.activo && i.sinUbicacion, INACTIVO: i => !i.activo
@@ -1229,6 +1302,7 @@
         abrirEnSucursal(r.producto, suc);
       };
       $('#psCat', raiz).onchange = e => { fPS.categoria = e.target.value; fPS.limite = 50; pintar(); };
+      $('#psUso', raiz).onchange = e => { fPS.uso = e.target.value; fPS.limite = 50; pintar(); };
       const sEmp = $('#psEmp', raiz), sSuc = $('#psSuc', raiz);
       if (sEmp) sEmp.onchange = () => { vistaPS.empresaId = sEmp.value; vistaPS.sucursalId = ''; fPS.limite = 50; App.refrescarContexto(); };
       if (sSuc) sSuc.onchange = () => { vistaPS.sucursalId = sSuc.value; fPS.limite = 50; App.refrescarContexto(); };
@@ -1601,7 +1675,7 @@
     }
     if (!disponibles.size) { App.aviso('Todos los productos activos del catálogo ya están asignados a esta sucursal.', 'info', 6); return; }
     const sel = new Set();
-    const est = { buscar: '', categoria: '' };
+    const est = { buscar: '', categoria: '', uso: '' };
     const LIM = 200;
 
     const f = modalAncho({
@@ -1610,7 +1684,8 @@
         'Puede escanear uno tras otro: cada código leído se marca solo.</p>' +
         '<div class="filtros"><div class="campo"><label for="aBuscar">Buscar o escanear</label>' +
         '<input class="entrada" id="aBuscar" autocomplete="off" enterkeyhint="search" placeholder="Ej. martillo, stanley"></div>' +
-        '<div class="campo corto"><label for="aCat">Categoría</label>' + lista('aCat', [['', 'Todas']].concat(arbolCategorias(c).map(x => [x[0], x[1]])), '') + '</div></div>' +
+        '<div class="campo corto"><label for="aCat">Categoría</label>' + lista('aCat', [['', 'Todas']].concat(arbolCategorias(c).map(x => [x[0], x[1]])), '') + '</div>' +
+        '<div class="campo corto"><label for="aUso">Uso / profesión</label>' + lista('aUso', opcionesUsos(c), '') + '</div></div>' +
         '<div class="barra-sel"><button type="button" class="btn btn-chico btn-borde" id="aTodos">Marcar los de la lista</button>' +
         '<button type="button" class="btn btn-chico btn-borde" id="aNinguno">Quitar todas las marcas</button>' +
         '<b id="aCuenta">0 marcados</b></div>' +
@@ -1633,7 +1708,7 @@
     };
     let vistaActual = [];
     const pintar = async () => {
-      vistaActual = await buscar(est.buscar, { ids: disponibles, categorias: est.categoria ? descendientes(c, est.categoria) : null });
+      vistaActual = await buscar(est.buscar, { ids: disponibles, uso: est.uso, categorias: est.categoria ? descendientes(c, est.categoria) : null });
       const mostrar = vistaActual.slice(0, LIM);
       $('#aLista', f).innerHTML = !mostrar.length ? '<p class="vacio">Ningún producto disponible coincide.</p>'
         : mostrar.map(p => {
@@ -1663,6 +1738,7 @@
       iB.focus();
     };
     $('#aCat', f).onchange = e => { est.categoria = e.target.value; pintar(); };
+    $('#aUso', f).onchange = e => { est.uso = e.target.value; pintar(); };
     $('#aTodos', f).onclick = () => { vistaActual.slice(0, LIM).forEach(p => sel.add(String(p.id))); contar(); pintar(); };
     $('#aNinguno', f).onclick = () => { sel.clear(); contar(); pintar(); };
     pintar();
@@ -1841,12 +1917,15 @@
         '<label class="check"><input type="checkbox" id="lStock"' + (guardado.stock ? ' checked' : '') + '><span><b>Stock</b><small>Unidades en esta sucursal</small></span></label>' +
         '<label class="check"><input type="checkbox" id="lImg"' + (guardado.img !== false ? ' checked' : '') + '><span><b>Imágenes</b></span></label>' +
         '</div></div>' +
+        campo('lNota', 'Texto destacado (opcional)', guardado.nota != null ? guardado.nota : 'Consulta nuestros precios por caja cerrada.',
+          { clase: 'todo', area: true, attrs: ' maxlength="300"', ayuda: 'Se imprime resaltado debajo del título. Déjelo vacío si no quiere ningún texto.' }) +
         '<div class="seccion-form">Productos de la lista</div>' +
         '<div class="campo todo"><label for="lBuscar">Buscar y agregar uno por uno <small class="suave">(Enter o escanear agrega el producto)</small></label>' +
         '<input class="entrada" id="lBuscar" autocomplete="off" enterkeyhint="search" placeholder="Código, código de barras o nombre · marca después de una coma">' +
         '<div class="l-sugerencias" id="lSug"></div></div>' +
-        '<div class="campo"><label for="lMarca">O agregar todos los de una marca</label><div class="con-mas">' +
-        lista('lMarca', [['', '— Elija la marca —']].concat(marcas.map(mm => [mm.id, mm.nombre])), '') +
+        '<div class="campo"><label for="lGrupo">O agregar todos los de…</label><div class="con-mas">' +
+        lista('lTipo', [['MARCA', 'Marca'], ['CATEGORIA', 'Categoría'], ['USO', 'Uso / profesión']], 'MARCA', ' style="flex:0 0 42%"') +
+        '<select class="entrada" id="lGrupo"></select>' +
         '<button type="button" class="btn btn-borde" id="lMasMarca">Agregar</button></div></div>' +
         '<div class="campo"><label>&nbsp;</label><div class="acciones-fila" style="justify-content:flex-start">' +
         '<button type="button" class="btn btn-borde" id="lTodos">Agregar todos (' + items.length + ')</button>' +
@@ -1902,10 +1981,27 @@
       const q = ev.target.closest('[data-quitar-l]');
       if (q) { sel.splice(sel.indexOf(q.dataset.quitarL), 1); pintarElegidos(); sugerir(); }
     });
+    // Opciones del segundo select según el tipo (solo las que tienen productos en esta sucursal)
+    const grupos = {
+      MARCA: () => marcas.map(mm => [mm.id, mm.nombre + ' (' + items.filter(i => mismo(i.p.marca_id, mm.id)).length + ')']),
+      CATEGORIA: () => arbolCategorias(c).map(x => [x[0], x[1], items.filter(i => descendientes(c, x[0]).has(String(i.p.categoria_id))).length])
+        .filter(x => x[2]).map(x => [x[0], x[1] + ' (' + x[2] + ')']),
+      USO: () => c.usos.filter(activo).map(u => [u.codigo, u.nombre, items.filter(i => usosDe(i.p).indexOf(u.codigo) >= 0).length])
+        .filter(x => x[2]).map(x => [x[0], x[1] + ' (' + x[2] + ')'])
+    };
+    const pintarGrupos = () => {
+      const op2 = grupos[$('#lTipo', f).value]();
+      $('#lGrupo', f).innerHTML = (op2.length ? [['', '— Elija —']].concat(op2) : [['', '— No hay —']])
+        .map(o => '<option value="' + esc(o[0]) + '">' + esc(o[1]) + '</option>').join('');
+    };
+    $('#lTipo', f).onchange = pintarGrupos;
+    pintarGrupos();
     $('#lMasMarca', f).onclick = () => {
-      const mId = $('#lMarca', f).value;
-      if (!mId) { App.aviso('Elija una marca.', 'info'); return; }
-      const n = agregar(items.filter(i => mismo(i.p.marca_id, mId)).sort((a, b) => porNombre(a.p, b.p)).map(i => i.p.id));
+      const tipo = $('#lTipo', f).value, val = $('#lGrupo', f).value;
+      if (!val) { App.aviso('Elija qué grupo agregar.', 'info'); return; }
+      const cats = tipo === 'CATEGORIA' ? descendientes(c, val) : null;
+      const n = agregar(items.filter(i => tipo === 'MARCA' ? mismo(i.p.marca_id, val) : tipo === 'CATEGORIA' ? cats.has(String(i.p.categoria_id)) : usosDe(i.p).indexOf(val) >= 0)
+        .sort((a, b) => porNombre(a.p, b.p)).map(i => i.p.id));
       App.aviso(n ? n + ' producto(s) agregados' : 'Esos productos ya estaban en la lista', n ? 'ok' : 'info', 2);
     };
     $('#lTodos', f).onclick = () => { agregar(items.slice().sort((a, b) => porNombre(a.p, b.p)).map(i => i.p.id)); };
@@ -1919,7 +2015,7 @@
         const dias = leerNumero(m, 'lDias', 'los días de validez', { dec: 0 });
         if (!sel.length) return mensaje(m, 'Agregue al menos un producto.');
         const op = { nombre: nombre, dias: dias === '' ? 0 : dias, orden: $('#lOrden', m).value, pu: $('#lPU', m).checked, pm: $('#lPM', m).checked,
-          pc: $('#lPC', m).checked, stock: $('#lStock', m).checked, img: $('#lImg', m).checked };
+          pc: $('#lPC', m).checked, stock: $('#lStock', m).checked, img: $('#lImg', m).checked, nota: txt($('#lNota', m).value) };
         try { localStorage.setItem(OPC_LISTA, JSON.stringify(op)); } catch (e) { /* sin almacenamiento */ }
         const ventana = window.open('', '_blank');   // se abre ya (si no, el navegador la bloquea)
         const empresa = await Datos.obtener('EMPRESAS', suc.empresa_id) || {};
@@ -1992,6 +2088,7 @@
       'td{padding:5px 6px;border-bottom:1px solid #e3e5ec;vertical-align:middle}td small{display:block;color:#6b708a;font-size:9.5px;margin-top:1px}' +
       'td.img{width:46px}td.img img{width:40px;height:40px;object-fit:contain;display:block}' +
       '.num{text-align:right;white-space:nowrap}.n{width:22px;color:#8a8fa6}.cod{white-space:nowrap;font-family:Consolas,monospace}' +
+      '.nota-dest{margin:0 0 10px;padding:8px 12px;border-left:5px solid ' + c2 + ';background:#f6f7fb;font-size:13px;font-weight:700;color:' + c1 + ';white-space:pre-line}' +
       '.pie{margin-top:12px;padding-top:8px;border-top:1px solid #e3e5ec;color:#6b708a;font-size:10px;display:flex;justify-content:space-between;gap:10px}' +
       '@media print{body{background:#fff}.barra{display:none}.hoja{width:auto;min-height:0;margin:0;padding:0;box-shadow:none}' +
       '*{-webkit-print-color-adjust:exact;print-color-adjust:exact}}' +
@@ -2006,6 +2103,7 @@
       '<h1>' + esc(op.nombre) + '</h1>' +
       '<div class="meta"><span>Fecha: <b>' + fecha(hoy) + '</b> · ' + d.items.length + ' producto(s) · Precios en Bs</span>' +
       (op.dias > 0 ? '<span class="valido">Válido por ' + op.dias + ' día' + (op.dias === 1 ? '' : 's') + ' (hasta el ' + fecha(hasta) + ')</span>' : '') + '</div>' +
+      (op.nota ? '<div class="nota-dest">' + esc(op.nota) + '</div>' : '') +
       '<table><thead><tr>' + cols.join('') + '</tr></thead><tbody>' + filas + '</tbody></table>' +
       '<div class="pie"><span>' + esc([e.nombre, suc.nombre, e.telefono ? 'Tel. ' + e.telefono : '', e.direccion].filter(Boolean).join(' · ')) + '</span>' +
       '<span>Generado el ' + esc(U.fechaCorta(U.ahoraISO())) + '</span></div></div>' +
@@ -2019,7 +2117,7 @@
   // ============================================================
   //  PANTALLA: BUSCAR PRODUCTO Y STOCK (todos los roles)
   // ============================================================
-  const fBus = { q: '', todo: false, limite: 30 };
+  const fBus = { q: '', todo: false, limite: 30, categoria: '', marca: '', uso: '' };
 
   App.pantalla('buscar', {
     refrescar: true,
@@ -2038,6 +2136,11 @@
         '<div class="buscador"><input class="entrada grande" id="bQ" data-foco value="' + esc(fBus.q) + '" autocomplete="off" ' +
         'enterkeyhint="search" placeholder="Código, código de barras o nombre · marca después de una coma"></div>' +
         '<p class="nota" style="margin:-4px 0 10px">Ej.: <b>martillo 16</b> · <b>martillo, stanley</b> · <b>, truper</b> (todo de una marca) · o escanee el código. Atajo: tecla <b>F2</b> desde cualquier pantalla.</p>' +
+        '<div class="filtros">' +
+        '<div class="campo corto"><label for="bCat">Categoría</label>' + lista('bCat', [['', 'Todas']].concat(arbolCategorias(c).map(x => [x[0], x[1]])), fBus.categoria) + '</div>' +
+        '<div class="campo corto"><label for="bMarca">Marca</label>' + lista('bMarca', opcionesMarcasFiltro(c), fBus.marca) + '</div>' +
+        '<div class="campo corto"><label for="bUso">Uso / profesión</label>' + lista('bUso', opcionesUsos(c), fBus.uso) + '</div>' +
+        (fBus.categoria || fBus.marca || fBus.uso ? '<button class="btn btn-borde" data-acc="limpiar">Quitar filtros</button>' : '') + '</div>' +
         (suc ? '<label class="check chico" style="margin:-4px 0 14px"><input type="checkbox" id="bTodo"' + (fBus.todo ? ' checked' : '') + '>' +
           '<span>Incluir productos del catálogo que no están en esta sucursal</span></label>' : '') +
         '<div id="bRes"></div>';
@@ -2046,17 +2149,19 @@
 
       const pintar = async () => {
         const cont = $('#bRes', raiz);
-        if (!txt(fBus.q)) {
+        const hayFiltro = fBus.categoria || fBus.marca || fBus.uso;
+        if (!txt(fBus.q) && !hayFiltro) {
           cont.innerHTML = '<div class="tarjeta vacio">' + ico('search') + '<p><b>¿Qué producto busca?</b><br>Puede escribir parte del nombre en cualquier orden ' +
             '(ej. <i>clavo 2</i>), el código interno o el código de barras.</p>' +
             (Escaner.soportado() ? '' : '<p class="nota">En este navegador la cámara no lee códigos: use un lector USB o escriba el código.</p>') + '</div>';
           return;
         }
         const ids = todo ? null : new Set(Array.from(asignados.values()).filter(activo).map(x => String(x.producto_id)));
-        const lista2 = await buscar(fBus.q, { ids: ids });
+        const lista2 = await buscar(fBus.q, { ids: ids, marca: fBus.marca, uso: fBus.uso, categorias: fBus.categoria ? descendientes(c, fBus.categoria) : null });
         if (!lista2.length) {
           const cod = codigoLimpio(fBus.q);
-          cont.innerHTML = vacio('search', 'No se encontró «' + esc(fBus.q) + '»' + (todo ? '.' : ' en esta sucursal.'),
+          cont.innerHTML = vacio('search', (txt(fBus.q) ? 'No se encontró «' + esc(fBus.q) + '»' : 'Ningún producto con esos filtros') +
+            (hayFiltro && txt(fBus.q) ? ' con los filtros elegidos' : '') + (todo ? '.' : ' en esta sucursal.'),
             (!todo ? '<button class="btn btn-borde" data-acc="todo" style="margin-top:12px">Buscar en todo el catálogo</button> ' : '') +
             (esAG() && cod && !/\s/.test(txt(fBus.q)) ? '<button class="btn btn-principal" data-acc="crear" data-cod="' + esc(cod) + '" style="margin-top:12px">' +
               icoX('mas') + 'Crear producto con este código</button>' : ''));
@@ -2079,8 +2184,12 @@
             (suc ? '<span class="prod-stock ' + clase + '"><b>' + (asig ? fmt(s) : '—') + '</b><small>' + esc(p.unidad || 'UND') + '</small></span>' : '') +
             '</button>';
         }).join('') + '</div>' +
-          (lista2.length > mostrar.length ? '<div class="mas-centro"><button class="btn btn-borde" data-acc="mas">Mostrar más (' + (lista2.length - mostrar.length) + ')</button></div>' : '');
+          (lista2.length > mostrar.length ? '<div class="mas-centro"><button class="btn btn-borde" data-acc="mas">Mostrar más (' + (lista2.length - mostrar.length) + ')</button></div>'
+            : '<p class="nota" style="margin-top:10px">' + lista2.length + ' producto(s).</p>');
       };
+      [['bCat', 'categoria'], ['bMarca', 'marca'], ['bUso', 'uso']].forEach(([id, k]) => {
+        $('#' + id, raiz).onchange = e => { fBus[k] = e.target.value; fBus.limite = 30; App.refrescarContexto(); };
+      });
       await pintar();
       restaurarFoco(raiz);
       if (!focoPrevio && esPantallaFina() && !document.querySelector('.modal-fondo')) iQ.focus();
@@ -2107,6 +2216,7 @@
           case 'ver': return verProducto(c.porId.get(String(b.dataset.id)));
           case 'mas': fBus.limite += 60; return pintar();
           case 'todo': fBus.todo = true; return App.refrescarContexto();
+          case 'limpiar': fBus.categoria = fBus.marca = fBus.uso = ''; return App.refrescarContexto();
           case 'crear': return formProducto(null, { codigoBarras: b.dataset.cod });
         }
       };
@@ -2152,6 +2262,7 @@
       '<div class="ficha-datos"><h3 class="ficha-nombre">' + esc(p.nombre) + '</h3>' +
       '<p class="ficha-sub">' + esc([p.codigo, c.nombreMarca(p.marca_id), c.rutaCategoria(p.categoria_id)].filter(Boolean).join(' · ')) +
       (activo(p) ? '' : ' <span class="etiqueta roja">Inactivo</span>') + '</p>' +
+      (usosDe(p).length ? '<p class="ficha-sub" style="margin-top:-6px">' + usosDe(p).map(u => '<span class="etiqueta uso">' + esc(c.nombreUso(u)) + '</span>').join(' ') + '</p>' : '') +
       (suc ? '<div class="ficha-stock ' + (!asig ? 'gris' : (st.get(suc.id + '|' + p.id) || 0) <= 0 ? 'roja' : '') + '"><span>Stock en ' + esc(suc.nombre) + '</span>' +
         '<b>' + (asig ? esc(textoStock(st.get(suc.id + '|' + p.id) || 0, p)) : 'No asignado') + '</b>' +
         (asig && txt(ps.ubicacion) ? '<small>📍 ' + esc(ps.ubicacion) + '</small>' : '') + '</div>' : '') +
