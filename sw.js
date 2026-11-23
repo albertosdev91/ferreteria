@@ -4,7 +4,7 @@
  * Sin internet: usa la copia guardada.
  * Al publicar una fase nueva, cambie VERSION y agregue los archivos nuevos a ARCHIVOS.
  */
-const VERSION = 'ferreteria-v4.0.0';
+const VERSION = 'ferreteria-v5.0.0';
 const ARCHIVOS = [
   './',
   './index.html',
@@ -17,6 +17,8 @@ const ARCHIVOS = [
   './js/sync.js',
   './js/app.js',
   './js/fase4-organizacion.js',
+  './js/escaner.js',
+  './js/fase5-productos.js',
   './icons/icon-192.png',
   './icons/icon-512.png',
   './icons/icon-maskable-512.png'
@@ -41,7 +43,7 @@ self.addEventListener('message', e => {
 self.addEventListener('fetch', e => {
   const req = e.request;
   const url = new URL(req.url);
-  // Solo archivos de la app (la API de Google no pasa por aquí)
+  // Solo archivos de la app (la API de Google y las imágenes de Drive no pasan por aquí)
   if (req.method !== 'GET' || url.origin !== self.location.origin) return;
 
   e.respondWith((async () => {
