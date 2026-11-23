@@ -422,3 +422,17 @@ button.tile:hover { border-color: var(--naranja); }
 .img-fila .btn-principal { flex: none; min-height: 46px; padding: 0 14px; }
 @media (max-width: 420px) { .img-fila .btn-principal span { display: none; } }
 .campo label small { font-weight: 400; }
+
+/* Fase 5.2 — calculadora de precios */
+.calc-barra { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+.calc-barra .ayuda { flex: 1 1 220px; }
+.chips-pct { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 2px 0 12px; font-size: 13px; color: var(--suave); }
+.chips-pct .chip { font-weight: 600; color: var(--azul); }
+.tabla.calc td { vertical-align: middle; }
+.tabla.calc .entrada { min-height: 40px; padding: 6px 10px; }
+.con-sufijo { display: flex; align-items: center; gap: 6px; min-width: 110px; }
+.con-sufijo span { color: var(--suave); font-size: 13px; }
+.entrada.mini-num { width: 70px; min-height: 32px; padding: 4px 8px; display: inline-block; margin: 4px 2px 0; }
+@media (max-width: 599px) { .tabla.calc th:nth-child(4), .tabla.calc td:nth-child(4) { display: none; } }
+.tabla.calc label.sub { display: flex; align-items: center; gap: 4px; white-space: nowrap; }
+.tabla.calc label.sub .mini-num { margin: 0; }
