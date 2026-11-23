@@ -473,3 +473,13 @@ button.tile:hover { border-color: var(--naranja); }
 .l-elegidos { margin-top: 8px; max-height: 38vh; }
 .l-elegidos .fila-sel { cursor: default; }
 .l-elegidos .btn-icono { color: var(--rojo); }
+
+/* Fase 5.5 — usos / profesiones */
+.usos-checks { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.chip-check { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border: 1px solid var(--borde); border-radius: 99px;
+  background: #fff; cursor: pointer; font-size: 13.5px; font-weight: 400 !important; color: var(--texto) !important; font-family: inherit; }
+.chip-check input { width: 16px; height: 16px; margin: 0; accent-color: var(--azul); }
+.chip-check:has(input:checked) { border-color: var(--naranja); background: #fff8ee; color: var(--azul) !important; font-weight: 600 !important; }
+.chip-check.nuevo { border-style: dashed; color: var(--azul) !important; }
+.chip-check.nuevo .ico { width: 16px; height: 16px; }
+.etiqueta.uso { background: #e8eefc; color: #2a3170; font-weight: 600; margin: 2px 2px 0 0; }
