@@ -1272,8 +1272,8 @@
       campoNum('sPU', 'Precio por unidad', ps.precio_unidad, { attrs: dis, idAyuda: 'mPU', ayuda: '&nbsp;' }) +
       campoNum('sPM', 'Precio por mayor (por unidad)', ps.precio_mayor, { attrs: dis, idAyuda: 'mPM', ayuda: '&nbsp;' }) +
       campoNum('sCM', 'Por mayor desde (unidades)', ps.cantidad_min_mayor, { attrs: dis, ph: 'Ej. 12', ayuda: 'Cantidad mínima para cobrar el precio por mayor.' }) +
-      campoNum('sPC', 'Precio por caja' + (upc > 1 ? ' (' + fmt(upc) + ' u)' : ''), ps.precio_caja, { attrs: dis, idAyuda: 'mPC',
-        ayuda: upc > 1 ? '&nbsp;' : 'El producto no tiene "unidades por caja" en el catálogo.' }) +
+      campoNum('sPC', 'Precio por caja cerrada (por unidad)', n0(ps.precio_caja) > 0 ? redondear(n0(ps.precio_caja) / (upc > 1 ? upc : 1), 4) : ps.precio_caja,
+        { attrs: dis, idAyuda: 'mPC', ayuda: upc > 1 ? '&nbsp;' : 'El producto no tiene "unidades por caja" en el catálogo.' }) +
       campo('sMotivo', 'Motivo del cambio', '', { clase: 'todo', ph: 'Opcional. Ej. Subió el precio del proveedor', attrs: ' maxlength="120"',
         ayuda: 'Queda en el historial de cambios de precio y ubicación.' }) +
       campoLista('sEstado', 'Estado en esta sucursal', [['ACTIVO', 'Asignado (se puede vender y mover)'], ['INACTIVO', 'Desasignado (no aparece)']], ps.estado || 'ACTIVO') +
@@ -1315,7 +1315,7 @@
       $('#mPM', f).innerHTML = ganancia(num($('#sPM', f).value), costo);
       if (upc > 1) {
         const pc = num($('#sPC', f).value);
-        $('#mPC', f).innerHTML = pc > 0 ? 'Equivale a ' + U.bs(pc / upc) + ' por unidad. ' + ganancia(pc / upc, costo) : '&nbsp;';
+        $('#mPC', f).innerHTML = pc > 0 ? '<b>Caja cerrada de ' + fmt(upc) + ': ' + U.bs(redondear(pc * upc, 2)) + ' en total.</b> ' + ganancia(pc, costo) : '&nbsp;';
       }
     };
     ['sCosto', 'sPU', 'sPM', 'sPC'].forEach(id => { $('#' + id, f).addEventListener('input', margenes); });
@@ -1358,10 +1358,10 @@
     const ini = {
       unidad: pctDe(v('sPU'), guardados.unidad),
       mayor: pctDe(v('sPM'), guardados.mayor),
-      caja: upc > 1 ? pctDe(v('sPC') ? v('sPC') / upc : null, guardados.caja) : 0
+      caja: upc > 1 ? pctDe(v('sPC'), guardados.caja) : 0
     };
     const filas = [['unidad', 'Precio por unidad', 'por unidad'], ['mayor', 'Precio por mayor', 'por unidad']]
-      .concat(upc > 1 ? [['caja', 'Precio por caja cerrada', 'caja de ' + fmt(upc) + ' ' + (p.unidad || 'u')]] : []);
+      .concat(upc > 1 ? [['caja', 'Precio por caja cerrada', 'por unidad · caja de ' + fmt(upc) + ' ' + (p.unidad || 'u')]] : []);
     const fila = ([k, titulo, sub]) => '<tr data-k="' + k + '"><td><b>' + titulo + '</b><span class="sub">' + esc(sub) + '</span>' +
       (k === 'mayor' ? '<label class="sub">Desde <input class="entrada mini-num" id="kMin" inputmode="decimal" value="' + esc(fmtNum($('#sCM', fPS).value)) + '"> u</label>' : '') + '</td>' +
       '<td><div class="con-sufijo"><input class="entrada" data-pct list="kPresets" inputmode="decimal" value="' + esc(fmtNum(ini[k])) + '"><span>%</span></div></td>' +
@@ -1379,7 +1379,7 @@
       '</div>' +
       '<datalist id="kPresets">' + PCT_PRESETS.map(x => '<option value="' + x + '">').join('') + '</datalist>' +
       '<div class="chips-pct"><span>% rápido para todos:</span>' + PCT_PRESETS.slice(0, 8).map(x => '<button type="button" class="chip" data-todos="' + x + '">' + x + '%</button>').join('') + '</div>' +
-      '<div class="tabla-env"><table class="tabla calc"><thead><tr><th>Precio</th><th>% ganancia</th><th>Precio de venta</th><th class="num">Ganancia</th></tr></thead><tbody>' +
+      '<div class="tabla-env"><table class="tabla calc"><thead><tr><th>Precio</th><th>% ganancia</th><th>Precio de venta</th><th class="num">Ganancia por unidad</th></tr></thead><tbody>' +
       filas.map(fila).join('') + '</tbody></table></div><div class="f-msg"></div>';
 
     const m = modalAncho({
@@ -1390,14 +1390,14 @@
     const adq = () => num($('#kAdq', m).value) || 0;
     const paso = () => Number($('#kRed', m).value) || 0;
     const redondearPrecio = x => { const st = paso(); return st ? redondear(Math.ceil(redondear(x / st, 6)) * st, 2) : redondear(x, 2); };
-    const factorFila = k => k === 'caja' ? upc : 1;
+    const factorFila = () => 1;   // todas las filas son por unidad
     const tr = k => $('tr[data-k="' + k + '"]', m);
     const ganancia = k => {
       const precioV = num($('[data-precio]', tr(k)).value);
       const base = adq() * factorFila(k);
       $('[data-gan]', tr(k)).innerHTML = precioV > 0 && base > 0
         ? '<span class="' + (precioV < base ? 'txt-rojo' : 'txt-verde') + '">' + U.bs(precioV - base) + '</span>' +
-          (k === 'caja' ? '<span class="sub">' + U.bs(precioV / upc) + ' c/u</span>' : '')
+          (k === 'caja' ? '<span class="sub">c/u · <b>Caja: ' + U.bs(redondear(precioV * upc, 2)) + '</b></span>' : '')
         : '—';
     };
     const desdePct = k => {
@@ -1489,7 +1489,9 @@
         nuevo.precio_unidad = leerNumero(f, 'sPU', 'el precio por unidad');
         nuevo.precio_mayor = leerNumero(f, 'sPM', 'el precio por mayor');
         nuevo.cantidad_min_mayor = leerNumero(f, 'sCM', 'la cantidad para precio por mayor', { dec: 3 });
-        nuevo.precio_caja = leerNumero(f, 'sPC', 'el precio por caja');
+        // Se escribe por unidad; en la hoja se guarda el total de la caja cerrada
+        const pcUnidad = leerNumero(f, 'sPC', 'el precio por caja cerrada', { dec: 4 });
+        nuevo.precio_caja = pcUnidad === '' ? '' : redondear(pcUnidad * (n0(p.unidades_por_caja) > 1 ? n0(p.unidades_por_caja) : 1), 2);
         if (n0(nuevo.precio_mayor) > 0 && !(n0(nuevo.cantidad_min_mayor) > 0)) return mensaje(f, 'Indique desde cuántas unidades vale el precio por mayor.');
         if (!(n0(nuevo.precio_mayor) > 0) && n0(nuevo.cantidad_min_mayor) > 0) return mensaje(f, 'Escriba el precio por mayor (o borre la cantidad "por mayor desde").');
         const costo = n0(op.costoEditable ? nuevo.costo_promedio : ps.costo_promedio);
