@@ -57,6 +57,7 @@
   // Íconos de esta fase
   const ICO5 = {
     mas: 'M12 5v14M5 12h14',
+    calc: 'M6 2h12a1 1 0 011 1v18a1 1 0 01-1 1H6a1 1 0 01-1-1V3a1 1 0 011-1M8 6h8v4H8zM8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01M16 18h.01',
     etiqueta: 'M3 3h8l10 10-8 8L3 11V3M7.5 7.5h.01',
     imagen: 'M3 5h18v14H3zM3 16l5-5 4 4 3-3 6 6M15.5 9.5h.01',
     copiar: 'M8 8h12v12H8zM4 16V4h12',
@@ -1105,7 +1106,7 @@
         '<div class="titulo"><div><h1>Productos de la sucursal</h1><p>' + esc(suc.nombre) +
         (suc.es_central === 'SI' ? ' (central)' : '') + ' · stock en unidades, precios en Bs.</p></div>' +
         '<div class="acciones-fila">' +
-        (ctx.sucursales.length > 1 ? '<button class="btn btn-borde" data-acc="copiar">' + icoX('copiar') + 'Copiar de otra sucursal</button>' : '') +
+        (esAG() && ctx.sucursales.length > 1 ? '<button class="btn btn-borde" data-acc="copiar">' + icoX('copiar') + 'Copiar de otra sucursal</button>' : '') +
         '<button class="btn btn-principal" data-acc="asignar">' + icoX('mas') + 'Asignar productos</button></div></div>' +
         (!editaPrecios() ? '<div class="msg msg-info">Su rol puede ver costos y precios, pero no cambiar los precios.</div>' : '') +
         '<div class="tiles">' +
@@ -1130,7 +1131,7 @@
         const cont = $('#psLista', raiz);
         if (!items.length) {
           cont.innerHTML = vacio('box', '<b>Esta sucursal todavía no tiene productos.</b><br>Use <b>Asignar productos</b> para elegirlos del catálogo general' +
-            (ctx.sucursales.length > 1 ? ' o <b>Copiar de otra sucursal</b>.' : '.'),
+            (esAG() && ctx.sucursales.length > 1 ? ' o <b>Copiar de otra sucursal</b>.' : '.'),
             '<button class="btn btn-principal" data-acc="asignar" style="margin-top:12px">' + icoX('mas') + 'Asignar productos</button>');
           return;
         }
@@ -1151,7 +1152,7 @@
         const mostrar = vista.slice(0, fPS.limite);
         const costos = veCostos();
         cont.innerHTML = '<div class="tabla-env"><table class="tabla"><thead><tr><th></th><th>Producto</th><th class="num">Stock</th><th class="num">Mín.</th>' +
-          (costos ? '<th class="num">Costo</th>' : '') + '<th class="num">P. unidad</th><th class="num">P. mayor</th><th class="num">P. caja</th><th></th></tr></thead><tbody>' +
+          (costos ? '<th class="num">P. adquisición</th>' : '') + '<th class="num">P. unidad</th><th class="num">P. mayor</th><th class="num">P. caja</th><th></th></tr></thead><tbody>' +
           mostrar.map(i => {
             const ps = i.ps, p = i.p;
             const etq = (i.activo ? '' : ' <span class="etiqueta roja">Desasignado</span>') +
@@ -1200,7 +1201,7 @@
         ev.stopPropagation();
         switch (b.dataset.acc) {
           case 'asignar': return asignarProductos();
-          case 'copiar': return copiarDeSucursal();
+          case 'copiar': return esAG() ? copiarDeSucursal() : null;
           case 'mas': fPS.limite += 100; return pintar();
           case 'editar': {
             const i = items.find(x => mismo(x.ps.id, b.dataset.id));
@@ -1264,8 +1265,10 @@
 
       '<div class="seccion-form">Costo y precios (Bs)</div>' +
       (!precios ? '<div class="msg msg-info todo">Su rol puede ver los precios, pero no cambiarlos.</div>' : '') +
-      campoNum('sCosto', 'Costo por unidad', ps.costo_promedio === '' || ps.costo_promedio == null ? '' : redondear(n0(ps.costo_promedio), 4),
-        { attrs: costoEditable ? '' : ' readonly', ayuda: 'Costo promedio. Se recalcula solo con cada compra (Fase 6).' }) +
+      (precios ? '<div class="todo calc-barra"><button type="button" class="btn btn-azul" id="sCalcular">' + icoX('calc') + 'Calcular precios</button>' +
+        '<span class="ayuda">Calcula precio por unidad, por mayor y por caja cerrada a partir del precio de adquisición, con porcentajes o a mano.</span></div>' : '') +
+      campoNum('sCosto', 'Precio de adquisición (por unidad)', ps.costo_promedio === '' || ps.costo_promedio == null ? '' : redondear(n0(ps.costo_promedio), 4),
+        { attrs: costoEditable ? '' : ' readonly', ayuda: 'Lo que cuesta UNA unidad. Con las compras (Fase 6) se recalcula solo (promedio ponderado).' }) +
       campoNum('sPU', 'Precio por unidad', ps.precio_unidad, { attrs: dis, idAyuda: 'mPU', ayuda: '&nbsp;' }) +
       campoNum('sPM', 'Precio por mayor (por unidad)', ps.precio_mayor, { attrs: dis, idAyuda: 'mPM', ayuda: '&nbsp;' }) +
       campoNum('sCM', 'Por mayor desde (unidades)', ps.cantidad_min_mayor, { attrs: dis, ph: 'Ej. 12', ayuda: 'Cantidad mínima para cobrar el precio por mayor.' }) +
@@ -1281,7 +1284,7 @@
         '<div class="todo oculto" id="iCampos"><div class="form-2">' +
         campoNum('iCant', 'Cantidad', '', { req: true }) +
         campoLista('iPres', 'En', presIni, 'UNIDAD') +
-        campoNum('iCosto', 'Costo por unidad (Bs)', ps.costo_promedio ? redondear(n0(ps.costo_promedio), 4) : '', { idAyuda: 'iAyuda', ayuda: '&nbsp;' }) +
+        campoNum('iCosto', 'Precio de adquisición por unidad (Bs)', ps.costo_promedio ? redondear(n0(ps.costo_promedio), 4) : '', { idAyuda: 'iAyuda', ayuda: '&nbsp;' }) +
         '</div></div>' : '') +
 
       (historial.length ? '<div class="seccion-form">Últimos cambios</div><div class="todo tabla-env"><table class="tabla compacta"><thead><tr>' +
@@ -1303,8 +1306,8 @@
       if (!(precioUnidad > 0) || !(costo > 0)) return '&nbsp;';
       const g = precioUnidad - costo;
       const pct = g / costo * 100;
-      return '<span class="' + (g < 0 ? 'txt-rojo' : 'txt-verde') + '">Ganancia ' + U.bs(g) + ' por unidad (' + fmt(pct, 1) + '% sobre el costo)' +
-        (g < 0 ? ' · ¡por debajo del costo!' : '') + '</span>';
+      return '<span class="' + (g < 0 ? 'txt-rojo' : 'txt-verde') + '">Ganancia ' + U.bs(g) + ' por unidad (' + fmt(pct, 1) + '% sobre la adquisición)' +
+        (g < 0 ? ' · ¡por debajo del precio de adquisición!' : '') + '</span>';
     };
     const margenes = () => {
       const costo = num($('#sCosto', f).value) || 0;
@@ -1317,6 +1320,8 @@
     };
     ['sCosto', 'sPU', 'sPM', 'sPC'].forEach(id => { $('#' + id, f).addEventListener('input', margenes); });
     margenes();
+    const bCalc = $('#sCalcular', f);
+    if (bCalc) bCalc.onclick = () => calcularPrecios(f, p, { costoEditable: costoEditable });
 
     if (puedeInicial) {
       const chk = $('#iIni', f);
@@ -1334,6 +1339,142 @@
     }
   }
 
+  // ---------- Calculadora de precios ----------
+  // Precio = adquisición × (1 + % ganancia). Caja cerrada = adquisición × unidades por caja × (1 + %).
+  // Se puede escribir el % (calcula el precio) o el precio (calcula el %).
+  const PCT_PRESETS = [10, 15, 20, 25, 30, 35, 40, 50, 60, 80, 100];
+  const PCT_INICIALES = { unidad: 30, mayor: 20, caja: 15 };
+  function pctGuardados() {
+    try { return Object.assign({}, PCT_INICIALES, JSON.parse(localStorage.getItem('ferreteria_pct_precios') || '{}')); }
+    catch (e) { return Object.assign({}, PCT_INICIALES); }
+  }
+
+  function calcularPrecios(fPS, p, op) {
+    const upc = n0(p.unidades_por_caja);
+    const v = id => num($('#' + id, fPS).value);
+    const adq0 = v('sCosto');
+    const guardados = pctGuardados();
+    const pctDe = (precioU, def) => adq0 > 0 && precioU > 0 ? redondear((precioU / adq0 - 1) * 100, 2) : def;
+    const ini = {
+      unidad: pctDe(v('sPU'), guardados.unidad),
+      mayor: pctDe(v('sPM'), guardados.mayor),
+      caja: upc > 1 ? pctDe(v('sPC') ? v('sPC') / upc : null, guardados.caja) : 0
+    };
+    const filas = [['unidad', 'Precio por unidad', 'por unidad'], ['mayor', 'Precio por mayor', 'por unidad']]
+      .concat(upc > 1 ? [['caja', 'Precio por caja cerrada', 'caja de ' + fmt(upc) + ' ' + (p.unidad || 'u')]] : []);
+    const fila = ([k, titulo, sub]) => '<tr data-k="' + k + '"><td><b>' + titulo + '</b><span class="sub">' + esc(sub) + '</span>' +
+      (k === 'mayor' ? '<label class="sub">Desde <input class="entrada mini-num" id="kMin" inputmode="decimal" value="' + esc(fmtNum($('#sCM', fPS).value)) + '"> u</label>' : '') + '</td>' +
+      '<td><div class="con-sufijo"><input class="entrada" data-pct list="kPresets" inputmode="decimal" value="' + esc(fmtNum(ini[k])) + '"><span>%</span></div></td>' +
+      '<td><div class="con-sufijo"><span>Bs</span><input class="entrada" data-precio inputmode="decimal"></div></td>' +
+      '<td class="num" data-gan></td></tr>';
+
+    const html = '<p class="nota">Escriba el <b>% de ganancia</b> y se calcula el precio, o escriba el <b>precio</b> y se calcula el %. ' +
+      'Al final pulse <b>Copiar a los precios</b> y luego <b>Guardar</b> en el producto.</p>' +
+      '<div class="form-2">' +
+      campoNum('kAdq', 'Precio de adquisición por unidad (Bs)', adq0 == null ? '' : adq0, { attrs: op.costoEditable ? '' : ' readonly', req: true }) +
+      (upc > 1 ? campoNum('kAdqCaja', 'o por caja de ' + fmt(upc) + ' (Bs)', adq0 > 0 ? redondear(adq0 * upc, 2) : '', { attrs: op.costoEditable ? '' : ' readonly',
+        ayuda: 'Si sabe lo que cuesta la caja, escríbalo aquí y se calcula el de la unidad.' }) : '') +
+      campoLista('kRed', 'Redondear precios calculados', [['0', 'Sin redondear'], ['0.1', 'Hacia arriba a 0,10'], ['0.5', 'Hacia arriba a 0,50'], ['1', 'Hacia arriba a 1 Bs']],
+        localStorage.getItem('ferreteria_redondeo') || '0') +
+      '</div>' +
+      '<datalist id="kPresets">' + PCT_PRESETS.map(x => '<option value="' + x + '">').join('') + '</datalist>' +
+      '<div class="chips-pct"><span>% rápido para todos:</span>' + PCT_PRESETS.slice(0, 8).map(x => '<button type="button" class="chip" data-todos="' + x + '">' + x + '%</button>').join('') + '</div>' +
+      '<div class="tabla-env"><table class="tabla calc"><thead><tr><th>Precio</th><th>% ganancia</th><th>Precio de venta</th><th class="num">Ganancia</th></tr></thead><tbody>' +
+      filas.map(fila).join('') + '</tbody></table></div><div class="f-msg"></div>';
+
+    const m = modalAncho({
+      titulo: 'Calcular precios · ' + p.codigo,
+      html: html,
+      botones: [{ t: 'Cancelar' }, { t: 'Copiar a los precios', clase: 'btn-principal', accion: mm => copiar(mm) }]
+    });
+    const adq = () => num($('#kAdq', m).value) || 0;
+    const paso = () => Number($('#kRed', m).value) || 0;
+    const redondearPrecio = x => { const st = paso(); return st ? redondear(Math.ceil(redondear(x / st, 6)) * st, 2) : redondear(x, 2); };
+    const factorFila = k => k === 'caja' ? upc : 1;
+    const tr = k => $('tr[data-k="' + k + '"]', m);
+    const ganancia = k => {
+      const precioV = num($('[data-precio]', tr(k)).value);
+      const base = adq() * factorFila(k);
+      $('[data-gan]', tr(k)).innerHTML = precioV > 0 && base > 0
+        ? '<span class="' + (precioV < base ? 'txt-rojo' : 'txt-verde') + '">' + U.bs(precioV - base) + '</span>' +
+          (k === 'caja' ? '<span class="sub">' + U.bs(precioV / upc) + ' c/u</span>' : '')
+        : '—';
+    };
+    const desdePct = k => {
+      const pct = num($('[data-pct]', tr(k)).value);
+      const base = adq() * factorFila(k);
+      $('[data-precio]', tr(k)).value = pct !== null && base > 0 ? fmtNum(redondearPrecio(base * (1 + pct / 100))) : '';
+      ganancia(k);
+    };
+    const desdePrecio = k => {
+      const pv = num($('[data-precio]', tr(k)).value);
+      const base = adq() * factorFila(k);
+      $('[data-pct]', tr(k)).value = pv > 0 && base > 0 ? fmtNum(redondear((pv / base - 1) * 100, 2)) : '';
+      ganancia(k);
+    };
+    const todas = fn => filas.forEach(([k]) => fn(k));
+
+    // Precios iniciales: los que ya tiene el producto (o calculados con el %)
+    const actuales = { unidad: v('sPU'), mayor: v('sPM'), caja: v('sPC') };
+    todas(k => {
+      if (actuales[k] > 0) { $('[data-precio]', tr(k)).value = fmtNum(actuales[k]); desdePrecio(k); }
+      else desdePct(k);
+    });
+
+    $('#kAdq', m).addEventListener('input', () => {
+      const c = $('#kAdqCaja', m);
+      if (c) c.value = adq() > 0 ? fmtNum(redondear(adq() * upc, 2)) : '';
+      todas(desdePct);
+    });
+    const cajaAdq = $('#kAdqCaja', m);
+    if (cajaAdq) cajaAdq.addEventListener('input', () => {
+      const c = num(cajaAdq.value);
+      $('#kAdq', m).value = c > 0 ? fmtNum(redondear(c / upc, 4)) : '';
+      todas(desdePct);
+    });
+    $('#kRed', m).onchange = () => todas(desdePct);
+    $$('tbody tr', m).forEach(r => {
+      $('[data-pct]', r).addEventListener('input', () => desdePct(r.dataset.k));
+      $('[data-precio]', r).addEventListener('input', () => desdePrecio(r.dataset.k));
+    });
+    $$('[data-todos]', m).forEach(b => {
+      b.onclick = () => todas(k => { $('[data-pct]', tr(k)).value = b.dataset.todos; desdePct(k); });
+    });
+
+    function copiar(mm) {
+      try {
+        const a = leerNumero(mm, 'kAdq', 'el precio de adquisición', { dec: 4 });
+        return aplicar(a);
+      } catch (e) {
+        return mensaje(mm, e.message || String(e));
+      }
+      function aplicar(a) {
+        const pv = k => { const x = num($('[data-precio]', tr(k)).value); return x === null ? '' : x; };
+        for (const [k, titulo] of filas) {
+          const x = pv(k);
+          if (x !== '' && x < 0) return mensaje(mm, titulo + ': no puede ser negativo.');
+        }
+        const minMayor = num($('#kMin', mm).value);
+        if (pv('mayor') > 0 && !(minMayor > 0)) return mensaje(mm, 'Indique desde cuántas unidades vale el precio por mayor.');
+        const poner = (id, val) => { const el = $('#' + id, fPS); if (el && !el.disabled && !el.readOnly) { el.value = fmtNum(val); el.dispatchEvent(new Event('input', { bubbles: true })); } };
+        if (op.costoEditable && a !== '') poner('sCosto', a);
+        poner('sPU', pv('unidad'));
+        poner('sPM', pv('mayor'));
+        poner('sCM', minMayor === null ? '' : minMayor);
+        if (upc > 1) poner('sPC', pv('caja'));
+        // Recordar los % y el redondeo para el próximo producto
+        try {
+          const g = pctGuardados();
+          filas.forEach(([k]) => { const x = num($('[data-pct]', tr(k)).value); if (x !== null) g[k] = x; });
+          localStorage.setItem('ferreteria_pct_precios', JSON.stringify(g));
+          localStorage.setItem('ferreteria_redondeo', $('#kRed', mm).value);
+        } catch (e) { /* sin almacenamiento */ }
+        App.aviso('Precios copiados. Revise y pulse Guardar.', 'ok');
+        return true;
+      }
+    }
+  }
+
   async function guardarPS(f, ps, p, op) {
     try {
       const suc = App.contexto.sucursal;
@@ -1343,7 +1484,7 @@
         producto_especial: $('#sEsp', f).checked ? 'SI' : 'NO',
         estado: $('#sEstado', f).value
       };
-      if (op.costoEditable) nuevo.costo_promedio = leerNumero(f, 'sCosto', 'el costo', { dec: 4 });
+      if (op.costoEditable) nuevo.costo_promedio = leerNumero(f, 'sCosto', 'el precio de adquisición', { dec: 4 });
       if (op.precios) {
         nuevo.precio_unidad = leerNumero(f, 'sPU', 'el precio por unidad');
         nuevo.precio_mayor = leerNumero(f, 'sPM', 'el precio por mayor');
@@ -1356,9 +1497,9 @@
         if (n0(nuevo.precio_mayor) > 0 && n0(nuevo.precio_unidad) > 0 && n0(nuevo.precio_mayor) > n0(nuevo.precio_unidad)) avisos.push('el precio por mayor es más alto que el precio por unidad');
         const upc = n0(p.unidades_por_caja);
         if (costo > 0) {
-          if (n0(nuevo.precio_unidad) > 0 && n0(nuevo.precio_unidad) < costo) avisos.push('el precio por unidad está por debajo del costo');
-          if (n0(nuevo.precio_mayor) > 0 && n0(nuevo.precio_mayor) < costo) avisos.push('el precio por mayor está por debajo del costo');
-          if (upc > 1 && n0(nuevo.precio_caja) > 0 && n0(nuevo.precio_caja) / upc < costo) avisos.push('el precio por caja está por debajo del costo');
+          if (n0(nuevo.precio_unidad) > 0 && n0(nuevo.precio_unidad) < costo) avisos.push('el precio por unidad está por debajo del precio de adquisición');
+          if (n0(nuevo.precio_mayor) > 0 && n0(nuevo.precio_mayor) < costo) avisos.push('el precio por mayor está por debajo del precio de adquisición');
+          if (upc > 1 && n0(nuevo.precio_caja) > 0 && n0(nuevo.precio_caja) / upc < costo) avisos.push('el precio por caja está por debajo del precio de adquisición');
         }
         if (avisos.length && !(await App.confirmar('Revise los precios', 'Atención: ' + avisos.join('; ') + '. ¿Guardar de todos modos?', 'Guardar'))) return false;
       }
@@ -1710,7 +1851,7 @@
         precioFila('Precio por mayor', ps.precio_mayor, (n0(ps.cantidad_min_mayor) ? ' <small>desde ' + fmt(ps.cantidad_min_mayor) + '</small>' : '') + margen(ps.precio_mayor)) +
         precioFila('Precio caja' + (upc > 1 ? ' (' + fmt(upc) + ')' : ''), ps.precio_caja, upc > 1 ? ' <small>= ' + U.bs(n0(ps.precio_caja) / upc) + ' c/u</small>' + margen(n0(ps.precio_caja) / upc) : '') +
         (!n0(ps.precio_unidad) && !n0(ps.precio_mayor) && !n0(ps.precio_caja) ? '<div class="dato"><span>Precios</span><b class="suave">Sin precio cargado</b></div>' : '') +
-        (veCostos() ? '<div class="dato"><span>Costo por unidad</span><b>' + (costo ? U.bs(redondear(costo, 2)) : '—') + '</b></div>' : '') +
+        (veCostos() ? '<div class="dato"><span>Precio de adquisición</span><b>' + (costo ? U.bs(redondear(costo, 2)) : '—') + '</b></div>' : '') +
         (n0(ps.stock_minimo) ? '<div class="dato"><span>Stock mínimo</span><b>' + fmt(ps.stock_minimo) + '</b></div>' : '') +
         (ps.producto_especial === 'SI' ? '<div class="dato"><span>Tipo</span><b><span class="etiqueta naranja">Producto especial</span></b></div>' : '') +
         '</div>' : '') +
