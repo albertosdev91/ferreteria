@@ -1143,6 +1143,7 @@
         (suc.es_central === 'SI' ? ' (central)' : '') + ' · stock en unidades, precios en Bs.</p></div>' +
         '<div class="acciones-fila">' +
         (esAG() && alcance.sucursales.length > 1 ? '<button class="btn btn-borde" data-acc="copiar">' + icoX('copiar') + 'Copiar de otra sucursal</button>' : '') +
+        (editaPrecios() ? '<button class="btn btn-borde" data-acc="imprimir">' + ico('file') + 'Imprimir lista</button>' : '') +
         '<button class="btn btn-principal" data-acc="asignar">' + icoX('mas') + 'Asignar productos</button></div></div>' +
         (selectores ? '<div class="filtros selector-suc">' + selectores + '</div>' : '') +
         (!editaPrecios() ? '<div class="msg msg-info">Su rol puede ver costos y precios, pero no cambiar los precios.</div>' : '') +
@@ -1242,6 +1243,7 @@
         switch (b.dataset.acc) {
           case 'asignar': return asignarProductos(suc, alcance);
           case 'copiar': return esAG() ? copiarDeSucursal(suc, alcance) : null;
+          case 'imprimir': return editaPrecios() ? imprimirLista(suc) : null;
           case 'mas': fPS.limite += 100; return pintar();
           case 'editar': {
             const i = items.find(x => mismo(x.ps.id, b.dataset.id));
@@ -1727,53 +1729,84 @@
   // ---------- Copiar productos de otra sucursal ----------
   async function copiarDeSucursal(suc, alcance) {
     alcance = alcance || await alcanceSucursales();
-    const otras = alcance.sucursales.filter(s => !mismo(s.id, suc.id));
     const c = await cargar();
-    const destino = new Map((await Datos.listar('PRODUCTOS_SUCURSAL', x => mismo(x.sucursal_id, suc.id))).map(x => [String(x.producto_id), x]));
-    const origenDe = async id => (await Datos.listar('PRODUCTOS_SUCURSAL', x => mismo(x.sucursal_id, id) && activo(x)))
-      .filter(x => activo(c.porId.get(String(x.producto_id))) && !activo(destino.get(String(x.producto_id))));
+    const todasPS = await Datos.listar('PRODUCTOS_SUCURSAL');
+    const activosEn = id => todasPS.filter(x => mismo(x.sucursal_id, id) && activo(x) && activo(c.porId.get(String(x.producto_id))));
+    const sucDe = id => alcance.sucursales.find(x => mismo(x.id, id));
+    const multi = alcance.empresas.length > 1;
+    const opcEmp = alcance.empresas.filter(e => alcance.sucursales.some(x => mismo(x.empresa_id, e.id))).map(e => [e.id, e.nombre]);
+    const opcSuc = empId => alcance.sucursales.filter(x => mismo(x.empresa_id, empId)).map(x => [x.id, x.nombre + (x.es_central === 'SI' ? ' (central)' : '')]);
+    const origenIni = alcance.sucursales.find(x => !mismo(x.id, suc.id) && mismo(x.empresa_id, suc.empresa_id) && x.es_central === 'SI') ||
+      alcance.sucursales.find(x => !mismo(x.id, suc.id) && mismo(x.empresa_id, suc.empresa_id)) || alcance.sucursales.find(x => !mismo(x.id, suc.id));
+    const caja = (lado, titulo, s0) => '<div class="cp-caja ' + lado + '"><span class="cp-titulo">' + titulo + '</span>' +
+      (multi ? campoLista('cp' + lado + 'Emp', 'Empresa', opcEmp, s0.empresa_id) : '') +
+      campoLista('cp' + lado + 'Suc', 'Sucursal', opcSuc(s0.empresa_id), s0.id) +
+      '<div class="cp-dato" id="cp' + lado + 'Dato"></div></div>';
 
     const f = modalAncho({
-      titulo: 'Copiar productos a ' + suc.nombre,
-      html: '<p class="nota">Asigna a <b>' + esc(suc.nombre) + '</b> los productos que tiene otra sucursal. ' +
-        'Solo agrega los que faltan: los que ya están asignados aquí no se modifican. El stock <b>no</b> se copia.</p>' +
-        '<div class="form-2">' + campoLista('cOrigen', 'Copiar desde', otras.map(s => [s.id, (alcance.empresas.length > 1 ? nombreEmpresa(alcance, s.empresa_id) + ' › ' : '') +
-          s.nombre + (s.es_central === 'SI' ? ' (central)' : '')]),
-          (otras.find(s => s.es_central === 'SI' && mismo(s.empresa_id, suc.empresa_id)) || otras.find(s => mismo(s.empresa_id, suc.empresa_id)) || otras[0]).id, { clase: 'todo' }) +
-        '<div class="campo todo"><label>Copiar también</label><div class="checks">' +
-        (editaPrecios() ? '<label class="check"><input type="checkbox" id="cPrecios" checked><span><b>Precios</b><small>Unidad, mayor y caja</small></span></label>' +
-          '<label class="check"><input type="checkbox" id="cCosto" checked><span><b>Costo</b><small>Costo promedio actual</small></span></label>' : '') +
+      titulo: 'Copiar productos entre sucursales',
+      html: '<p class="nota">Asigna en el <b>destino</b> los productos que tiene el <b>origen</b>. Solo agrega los que faltan: ' +
+        'los que ya están asignados en el destino no se modifican. El stock <b>no</b> se copia.</p>' +
+        '<div class="cp-flujo">' + caja('O', 'Desde (origen)', origenIni) +
+        '<div class="cp-flecha"><svg viewBox="0 0 120 40" aria-hidden="true"><path d="M4 20h104M92 6l16 14-16 14"/></svg><b id="cpCuenta">0</b><small>productos</small></div>' +
+        caja('D', 'Hacia (destino)', suc) + '</div>' +
+        '<div class="campo"><label>Copiar también</label><div class="checks">' +
+        '<label class="check"><input type="checkbox" id="cPrecios" checked><span><b>Precios</b><small>Unidad, mayor y caja</small></span></label>' +
+        '<label class="check"><input type="checkbox" id="cCosto" checked><span><b>Precio de adquisición</b></span></label>' +
         '<label class="check"><input type="checkbox" id="cMin" checked><span><b>Stock mínimo</b></span></label>' +
         '<label class="check"><input type="checkbox" id="cEsp" checked><span><b>Producto especial</b></span></label>' +
         '<label class="check"><input type="checkbox" id="cUbic"><span><b>Ubicación</b><small>Solo si las dos sucursales se ordenan igual</small></span></label>' +
-        '</div></div></div><div class="msg msg-info" id="cResumen">Calculando…</div><div class="f-msg"></div>',
+        '</div></div><div class="f-msg"></div>',
       botones: [{ t: 'Cancelar' }, { t: 'Copiar', clase: 'btn-principal', accion: m => guardar(m) }]
     });
-    const resumen = async () => {
-      const lista2 = await origenDe($('#cOrigen', f).value);
-      $('#cResumen', f).textContent = lista2.length ? 'Se agregarán ' + lista2.length + ' producto(s).' : 'No hay productos nuevos para copiar desde esa sucursal.';
+    const selSuc = lado => $('#cp' + lado + 'Suc', f).value;
+    const nuevos = () => {
+      const o = selSuc('O'), d = selSuc('D');
+      if (!o || !d || mismo(o, d)) return [];
+      const yaEnDestino = new Set(activosEn(d).map(x => String(x.producto_id)));
+      return activosEn(o).filter(x => !yaEnDestino.has(String(x.producto_id)));
     };
-    $('#cOrigen', f).onchange = resumen;
-    resumen();
+    const actualizar = () => {
+      const o = selSuc('O'), d = selSuc('D');
+      $('#cpODato', f).innerHTML = '<b>' + activosEn(o).length + '</b> producto(s) asignados';
+      $('#cpDDato', f).innerHTML = '<b>' + activosEn(d).length + '</b> producto(s) asignados';
+      const n = nuevos().length;
+      $('#cpCuenta', f).textContent = mismo(o, d) ? '—' : String(n);
+      $('.cp-flujo', f).classList.toggle('cp-igual', mismo(o, d));
+      mensaje(f, mismo(o, d) ? 'El origen y el destino son la misma sucursal.' : n ? '' : 'El destino ya tiene todos los productos del origen.', mismo(o, d) ? 'error' : 'info');
+      $$('footer .btn', f).pop().textContent = n && !mismo(o, d) ? 'Copiar ' + n + ' producto(s)' : 'Copiar';
+    };
+    ['O', 'D'].forEach(lado => {
+      const e = $('#cp' + lado + 'Emp', f);
+      if (e) e.onchange = () => {
+        $('#cp' + lado + 'Suc', f).innerHTML = opcSuc(e.value).map(o => '<option value="' + esc(o[0]) + '">' + esc(o[1]) + '</option>').join('');
+        actualizar();
+      };
+      $('#cp' + lado + 'Suc', f).onchange = actualizar;
+    });
+    actualizar();
 
     async function guardar(m) {
       try {
-        const lista2 = await origenDe($('#cOrigen', m).value);
-        if (!lista2.length) return mensaje(m, 'No hay productos nuevos para copiar desde esa sucursal.');
+        const o = selSuc('O'), d = sucDe(selSuc('D'));
+        if (!d || mismo(o, d.id)) return mensaje(m, 'Elija un origen y un destino distintos.');
+        const lista2 = nuevos();
+        if (!lista2.length) return mensaje(m, 'No hay productos nuevos para copiar.');
+        const destino = new Map(todasPS.filter(x => mismo(x.sucursal_id, d.id)).map(x => [String(x.producto_id), x]));
         const chk = id => !!$('#' + id, m) && $('#' + id, m).checked;
-        const registros = lista2.map(o => {
-          const datos = { producto_especial: chk('cEsp') ? (o.producto_especial || 'NO') : 'NO', estado: 'ACTIVO' };
-          if (chk('cMin')) datos.stock_minimo = o.stock_minimo;
-          if (chk('cUbic')) datos.ubicacion = o.ubicacion;
-          if (chk('cPrecios')) ['precio_unidad', 'precio_mayor', 'cantidad_min_mayor', 'precio_caja'].forEach(k => { datos[k] = o[k]; });
-          if (chk('cCosto')) datos.costo_promedio = o.costo_promedio;
-          const ant = destino.get(String(o.producto_id));
+        const registros = lista2.map(x => {
+          const datos = { producto_especial: chk('cEsp') ? (x.producto_especial || 'NO') : 'NO', estado: 'ACTIVO' };
+          if (chk('cMin')) datos.stock_minimo = x.stock_minimo;
+          if (chk('cUbic')) datos.ubicacion = x.ubicacion;
+          if (chk('cPrecios')) ['precio_unidad', 'precio_mayor', 'cantidad_min_mayor', 'precio_caja'].forEach(k => { datos[k] = x[k]; });
+          if (chk('cCosto')) datos.costo_promedio = x.costo_promedio;
+          const ant = destino.get(String(x.producto_id));
           return { tabla: 'PRODUCTOS_SUCURSAL', fila: ant
             ? Object.assign({ id: ant.id, _origen: 'MANUAL', _motivo: 'Copiado de otra sucursal' }, datos)
-            : Object.assign({ id: U.uuid(), empresa_id: suc.empresa_id, sucursal_id: suc.id, producto_id: o.producto_id, ubicacion: '', stock_minimo: '' }, datos) };
+            : Object.assign({ id: U.uuid(), empresa_id: d.empresa_id, sucursal_id: d.id, producto_id: x.producto_id, ubicacion: '', stock_minimo: '' }, datos) };
         });
         await Datos.guardarVarios(registros);
-        App.aviso(registros.length + ' producto(s) copiados a ' + suc.nombre, 'ok');
+        App.aviso(registros.length + ' producto(s) copiados a ' + d.nombre, 'ok');
         await App.refrescarContexto();
         return true;
       } catch (err) {
@@ -1781,6 +1814,206 @@
         return mensaje(m, err.message || String(err));
       }
     }
+  }
+
+  // ---------- Imprimir lista de productos (PDF, tamaño carta) ----------
+  const OPC_LISTA = 'ferreteria_lista_imprimir';
+  async function imprimirLista(suc) {
+    const c = await cargar();
+    const items = (await itemsSucursal(suc.id)).filter(i => i.activo && activo(i.p));
+    if (!items.length) { App.aviso('Esta sucursal no tiene productos asignados.', 'info'); return; }
+    const porId = new Map(items.map(i => [String(i.p.id), i]));
+    const marcas = c.marcas.filter(mm => items.some(i => mismo(i.p.marca_id, mm.id))).sort(porNombre);
+    let guardado = {};
+    try { guardado = JSON.parse(localStorage.getItem(OPC_LISTA) || '{}'); } catch (e) { guardado = {}; }
+    const sel = [];   // ids en el orden en que se agregan
+
+    const f = modalAncho({
+      titulo: 'Imprimir lista de productos · ' + suc.nombre,
+      html: '<div class="form-2">' +
+        campo('lNombre', 'Nombre de la lista', guardado.nombre || '', { req: true, clase: 'todo', ph: 'Ej. Lista de precios - Herramientas', attrs: ' maxlength="80"' }) +
+        campoNum('lDias', 'Válido por (días)', guardado.dias || 7, { ayuda: 'Se imprime "Válido por N días" con la fecha límite.' }) +
+        campoLista('lOrden', 'Ordenar por', [['NOMBRE', 'Nombre'], ['CODIGO', 'Código'], ['MARCA', 'Marca y nombre'], ['AGREGADO', 'Como los agregué']], guardado.orden || 'NOMBRE') +
+        '<div class="campo todo"><label>Qué se imprime</label><div class="checks">' +
+        '<label class="check"><input type="checkbox" id="lPU"' + (guardado.pu !== false ? ' checked' : '') + '><span><b>Precio por unidad</b></span></label>' +
+        '<label class="check"><input type="checkbox" id="lPM"' + (guardado.pm ? ' checked' : '') + '><span><b>Precio por mayor</b><small>Con la cantidad mínima</small></span></label>' +
+        '<label class="check"><input type="checkbox" id="lPC"' + (guardado.pc ? ' checked' : '') + '><span><b>Precio por caja cerrada</b><small>Total de la caja y por unidad</small></span></label>' +
+        '<label class="check"><input type="checkbox" id="lStock"' + (guardado.stock ? ' checked' : '') + '><span><b>Stock</b><small>Unidades en esta sucursal</small></span></label>' +
+        '<label class="check"><input type="checkbox" id="lImg"' + (guardado.img !== false ? ' checked' : '') + '><span><b>Imágenes</b></span></label>' +
+        '</div></div>' +
+        '<div class="seccion-form">Productos de la lista</div>' +
+        '<div class="campo todo"><label for="lBuscar">Buscar y agregar uno por uno <small class="suave">(Enter o escanear agrega el producto)</small></label>' +
+        '<input class="entrada" id="lBuscar" autocomplete="off" enterkeyhint="search" placeholder="Código, código de barras o nombre · marca después de una coma">' +
+        '<div class="l-sugerencias" id="lSug"></div></div>' +
+        '<div class="campo"><label for="lMarca">O agregar todos los de una marca</label><div class="con-mas">' +
+        lista('lMarca', [['', '— Elija la marca —']].concat(marcas.map(mm => [mm.id, mm.nombre])), '') +
+        '<button type="button" class="btn btn-borde" id="lMasMarca">Agregar</button></div></div>' +
+        '<div class="campo"><label>&nbsp;</label><div class="acciones-fila" style="justify-content:flex-start">' +
+        '<button type="button" class="btn btn-borde" id="lTodos">Agregar todos (' + items.length + ')</button>' +
+        '<button type="button" class="btn btn-peligro" id="lVaciar">Quitar todos</button></div></div>' +
+        '<div class="todo"><b id="lCuenta">0 productos en la lista</b><div class="lista-sel l-elegidos" id="lElegidos"></div></div>' +
+        '</div><div class="f-msg"></div>',
+      botones: [{ t: 'Cancelar' }, { t: 'Imprimir / guardar PDF', clase: 'btn-principal', accion: m => generar(m) }]
+    });
+
+    const agregar = ids => {
+      let n = 0;
+      ids.forEach(id => { id = String(id); if (porId.has(id) && sel.indexOf(id) < 0) { sel.push(id); n++; } });
+      pintarElegidos();
+      return n;
+    };
+    const pintarElegidos = () => {
+      $('#lCuenta', f).textContent = sel.length + ' producto(s) en la lista';
+      $('#lElegidos', f).innerHTML = !sel.length ? '<p class="vacio" style="padding:12px">Todavía no agregó productos.</p>'
+        : sel.map(id => {
+          const i = porId.get(id);
+          return '<div class="check fila-sel">' + miniatura(i.p, c) + '<span style="flex:1;min-width:0"><b>' + esc(i.p.nombre) + '</b><small>' +
+            esc([i.p.codigo, c.nombreMarca(i.p.marca_id)].filter(Boolean).join(' · ')) + '</small></span>' +
+            '<button type="button" class="btn btn-icono" data-quitar-l="' + esc(id) + '" aria-label="Quitar">' + icoX('quitar') + '</button></div>';
+        }).join('');
+    };
+    const iB = $('#lBuscar', f);
+    Escaner.boton(iB, { enter: true, titulo: 'Escanee el producto' });
+    const ids = new Set(items.map(i => String(i.p.id)));
+    let sugeridos = [];
+    const sugerir = async () => {
+      sugeridos = txt(iB.value) ? (await buscar(iB.value, { ids: ids })).slice(0, 8) : [];
+      $('#lSug', f).innerHTML = sugeridos.map(p => '<button type="button" class="l-sug" data-agregar="' + esc(p.id) + '">' + miniatura(p, c) +
+        '<span><b>' + esc(p.nombre) + '</b><small>' + esc([p.codigo, c.nombreMarca(p.marca_id)].filter(Boolean).join(' · ')) + '</small></span>' +
+        (sel.indexOf(String(p.id)) >= 0 ? '<em>en la lista</em>' : '<em>+ agregar</em>') + '</button>').join('');
+    };
+    let espera = null;
+    iB.oninput = () => { clearTimeout(espera); espera = setTimeout(sugerir, 60); };
+    iB.onkeydown = async ev => {
+      if (ev.key !== 'Enter') return;
+      ev.preventDefault();
+      const r = await porCodigo(iB.value);
+      const id = r && ids.has(String(r.producto.id)) ? r.producto.id : (sugeridos.length === 1 ? sugeridos[0].id : null);
+      if (!id) { if (txt(iB.value)) App.aviso(r ? 'Ese producto no está asignado a esta sucursal.' : 'Elija el producto de la lista de sugerencias.', 'info'); return; }
+      agregar([id]);
+      Escaner.pitido();
+      iB.value = '';
+      sugerir();
+      iB.focus();
+    };
+    f.addEventListener('click', ev => {
+      const a = ev.target.closest('[data-agregar]');
+      if (a) { agregar([a.dataset.agregar]); sugerir(); return; }
+      const q = ev.target.closest('[data-quitar-l]');
+      if (q) { sel.splice(sel.indexOf(q.dataset.quitarL), 1); pintarElegidos(); sugerir(); }
+    });
+    $('#lMasMarca', f).onclick = () => {
+      const mId = $('#lMarca', f).value;
+      if (!mId) { App.aviso('Elija una marca.', 'info'); return; }
+      const n = agregar(items.filter(i => mismo(i.p.marca_id, mId)).sort((a, b) => porNombre(a.p, b.p)).map(i => i.p.id));
+      App.aviso(n ? n + ' producto(s) agregados' : 'Esos productos ya estaban en la lista', n ? 'ok' : 'info', 2);
+    };
+    $('#lTodos', f).onclick = () => { agregar(items.slice().sort((a, b) => porNombre(a.p, b.p)).map(i => i.p.id)); };
+    $('#lVaciar', f).onclick = () => { sel.length = 0; pintarElegidos(); sugerir(); };
+    pintarElegidos();
+
+    async function generar(m) {
+      try {
+        const nombre = txt($('#lNombre', m).value);
+        if (!nombre) return mensaje(m, 'Escriba el nombre de la lista.');
+        const dias = leerNumero(m, 'lDias', 'los días de validez', { dec: 0 });
+        if (!sel.length) return mensaje(m, 'Agregue al menos un producto.');
+        const op = { nombre: nombre, dias: dias === '' ? 0 : dias, orden: $('#lOrden', m).value, pu: $('#lPU', m).checked, pm: $('#lPM', m).checked,
+          pc: $('#lPC', m).checked, stock: $('#lStock', m).checked, img: $('#lImg', m).checked };
+        try { localStorage.setItem(OPC_LISTA, JSON.stringify(op)); } catch (e) { /* sin almacenamiento */ }
+        const ventana = window.open('', '_blank');   // se abre ya (si no, el navegador la bloquea)
+        const empresa = await Datos.obtener('EMPRESAS', suc.empresa_id) || {};
+        const stock = op.stock ? await stocks(suc.id) : new Map();
+        let lista2 = sel.map(id => porId.get(id));
+        const orden = { NOMBRE: (a, b) => porNombre(a.p, b.p), CODIGO: (a, b) => txt(a.p.codigo).localeCompare(txt(b.p.codigo), 'es', { numeric: true }),
+          MARCA: (a, b) => c.nombreMarca(a.p.marca_id).localeCompare(c.nombreMarca(b.p.marca_id), 'es') || porNombre(a.p, b.p) }[op.orden];
+        if (orden) lista2 = lista2.slice().sort(orden);
+        const html = documentoLista({ op: op, empresa: empresa, suc: suc, items: lista2, stock: stock, c: c });
+        if (ventana) {
+          ventana.document.open();
+          ventana.document.write(html);
+          ventana.document.close();
+        } else {
+          App.aviso('El navegador bloqueó la ventana nueva. Permita las ventanas emergentes para esta app e intente de nuevo.', 'error', 8);
+          return false;
+        }
+        return true;
+      } catch (err) {
+        console.error(err);
+        return mensaje(m, err.message || String(err));
+      }
+    }
+  }
+
+  /** Documento HTML tamaño carta, listo para imprimir o guardar como PDF. */
+  function documentoLista(d) {
+    const op = d.op, e = d.empresa, suc = d.suc, c = d.c;
+    const c1 = App.colorValido(e.color_principal) || '#0f132e';
+    const c2 = App.colorValido(e.color_secundario) || '#fe9f31';
+    const t1 = App.textoSobre(c1);
+    const hoy = new Date();
+    const hasta = new Date(hoy.getTime() + op.dias * 86400000);
+    const fecha = x => x.toLocaleDateString('es-BO', { day: '2-digit', month: '2-digit', year: 'numeric' });
+    const logo = e.logo_url ? urlDe(e.logo_url, c) : '';
+    const bs = v => n0(v) > 0 ? U.bs(v) : '—';
+    const cols = ['<th class="n">#</th>'].concat(op.img ? ['<th></th>'] : [], ['<th>Código</th>', '<th>Producto</th>'],
+      op.pu ? ['<th class="num">Precio unidad</th>'] : [], op.pm ? ['<th class="num">Precio por mayor</th>'] : [],
+      op.pc ? ['<th class="num">Caja cerrada</th>'] : [], op.stock ? ['<th class="num">Stock</th>'] : []);
+    const filas = d.items.map((i, n) => {
+      const p = i.p, ps = i.ps;
+      const upc = n0(p.unidades_por_caja);
+      const img = op.img ? imagenDe(p, c) : '';
+      return '<tr><td class="n">' + (n + 1) + '</td>' +
+        (op.img ? '<td class="img">' + (img ? '<img src="' + esc(img) + '" alt="" onerror="this.remove()">' : '') + '</td>' : '') +
+        '<td class="cod">' + esc(p.codigo) + '</td>' +
+        '<td><b>' + esc(p.nombre) + '</b><small>' + esc([c.nombreMarca(p.marca_id), p.unidad].filter(Boolean).join(' · ')) + '</small></td>' +
+        (op.pu ? '<td class="num"><b>' + bs(ps.precio_unidad) + '</b></td>' : '') +
+        (op.pm ? '<td class="num">' + bs(ps.precio_mayor) + (n0(ps.precio_mayor) && n0(ps.cantidad_min_mayor) ? '<small>desde ' + fmt(ps.cantidad_min_mayor) + '</small>' : '') + '</td>' : '') +
+        (op.pc ? '<td class="num">' + bs(ps.precio_caja) + (n0(ps.precio_caja) && upc > 1 ? '<small>' + fmt(upc) + ' u · ' + U.bs(n0(ps.precio_caja) / upc) + ' c/u</small>' : '') + '</td>' : '') +
+        (op.stock ? '<td class="num">' + fmt(d.stock.get(String(p.id)) || 0) + '</td>' : '') + '</tr>';
+    }).join('');
+    return '<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">' +
+      '<title>' + esc(op.nombre) + '</title><style>' +
+      '@page{size:letter;margin:12mm 11mm 14mm}' +
+      '*{box-sizing:border-box}body{margin:0;font-family:Arial,Helvetica,sans-serif;color:#1d2033;font-size:11px;background:#e9ebf1}' +
+      '.barra{position:sticky;top:0;z-index:2;display:flex;gap:10px;justify-content:center;align-items:center;padding:10px;background:#0f132e;color:#fff;font-size:14px}' +
+      '.barra button{font:inherit;font-weight:700;border:0;border-radius:8px;padding:10px 18px;cursor:pointer;background:#fe9f31;color:#0f132e}' +
+      '.hoja{width:216mm;min-height:279mm;margin:14px auto;padding:12mm 11mm;background:#fff;box-shadow:0 2px 12px rgba(0,0,0,.15)}' +
+      '.cab{display:flex;align-items:center;gap:12px;padding:10px 14px;border-radius:8px 8px 0 0;background:' + c1 + ';color:' + t1 + '}' +
+      '.cab img{width:52px;height:52px;object-fit:contain;background:#fff;border-radius:8px}' +
+      '.cab .emp{flex:1;min-width:0}.cab b{display:block;font-size:17px}.cab small{display:block;opacity:.85;font-size:11px}' +
+      '.cab .suc{text-align:right;font-size:11.5px}.cab .suc b{font-size:13px}' +
+      '.linea{height:5px;background:' + c2 + ';border-radius:0 0 8px 8px;margin-bottom:12px}' +
+      'h1{margin:0 0 4px;font-size:19px;color:' + c1 + '}' +
+      '.meta{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:10px;color:#4a4f6a}' +
+      '.valido{display:inline-block;padding:3px 10px;border-radius:99px;background:' + c2 + ';color:' + App.textoSobre(c2) + ';font-weight:700}' +
+      'table{width:100%;border-collapse:collapse}thead{display:table-header-group}tr{page-break-inside:avoid;break-inside:avoid}' +
+      'th{background:#f1f2f6;color:' + c1 + ';text-align:left;padding:6px 6px;font-size:10px;text-transform:uppercase;letter-spacing:.03em;border-bottom:2px solid ' + c1 + '}' +
+      'td{padding:5px 6px;border-bottom:1px solid #e3e5ec;vertical-align:middle}td small{display:block;color:#6b708a;font-size:9.5px;margin-top:1px}' +
+      'td.img{width:46px}td.img img{width:40px;height:40px;object-fit:contain;display:block}' +
+      '.num{text-align:right;white-space:nowrap}.n{width:22px;color:#8a8fa6}.cod{white-space:nowrap;font-family:Consolas,monospace}' +
+      '.pie{margin-top:12px;padding-top:8px;border-top:1px solid #e3e5ec;color:#6b708a;font-size:10px;display:flex;justify-content:space-between;gap:10px}' +
+      '@media print{body{background:#fff}.barra{display:none}.hoja{width:auto;min-height:0;margin:0;padding:0;box-shadow:none}' +
+      '*{-webkit-print-color-adjust:exact;print-color-adjust:exact}}' +
+      '@media (max-width:820px){.hoja{width:auto;margin:0;padding:10px}}' +
+      '</style></head><body>' +
+      '<div class="barra"><span>Vista previa · tamaño carta</span><button onclick="window.print()">Imprimir / Guardar como PDF</button></div>' +
+      '<div class="hoja"><div class="cab">' + (logo ? '<img src="' + esc(logo) + '" alt="" onerror="this.remove()">' : '') +
+      '<div class="emp"><b>' + esc(e.nombre || '') + '</b><small>' + esc(e.slogan || '') + '</small>' +
+      (e.nit ? '<small>NIT ' + esc(e.nit) + '</small>' : '') + '</div>' +
+      '<div class="suc"><b>' + esc(suc.nombre) + '</b>' + (suc.direccion ? '<br>' + esc(suc.direccion) : '') + (suc.telefono ? '<br>Tel. ' + esc(suc.telefono) : '') + '</div></div>' +
+      '<div class="linea"></div>' +
+      '<h1>' + esc(op.nombre) + '</h1>' +
+      '<div class="meta"><span>Fecha: <b>' + fecha(hoy) + '</b> · ' + d.items.length + ' producto(s) · Precios en Bs</span>' +
+      (op.dias > 0 ? '<span class="valido">Válido por ' + op.dias + ' día' + (op.dias === 1 ? '' : 's') + ' (hasta el ' + fecha(hasta) + ')</span>' : '') + '</div>' +
+      '<table><thead><tr>' + cols.join('') + '</tr></thead><tbody>' + filas + '</tbody></table>' +
+      '<div class="pie"><span>' + esc([e.nombre, suc.nombre, e.telefono ? 'Tel. ' + e.telefono : '', e.direccion].filter(Boolean).join(' · ')) + '</span>' +
+      '<span>Generado el ' + esc(U.fechaCorta(U.ahoraISO())) + '</span></div></div>' +
+      // Espera las imágenes y abre el cuadro de impresión
+      '<script>(function(){var im=[].slice.call(document.images);var n=0,t=im.length;function listo(){setTimeout(function(){window.focus();window.print();},300);}' +
+      'if(!t)return listo();var hecho=false;function uno(){if(++n>=t&&!hecho){hecho=true;listo();}}im.forEach(function(i){if(i.complete)uno();else{i.onload=uno;i.addEventListener("error",uno);}});' +
+      'setTimeout(function(){if(!hecho){hecho=true;listo();}},6000);})();<\/script>' +
+      '</body></html>';
   }
 
   // ============================================================
