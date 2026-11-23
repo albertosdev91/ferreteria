@@ -623,6 +623,7 @@
     const unidadIni = p.unidad || (unidades.some(x => x[0] === 'UNIDAD') ? 'UNIDAD' : unidades[0][0]);
     if (p.unidad && !unidades.some(x => mismo(x[0], p.unidad))) unidades.unshift([p.unidad, p.unidad]);
     const extras = nuevo ? [] : (c.imagenes.get(String(p.id)) || []);
+    const alcanceNuevo = nuevo ? await alcanceSucursales() : { empresas: [], sucursales: [] };
 
     const html = '<div class="form-2">' +
       '<div class="seccion-form">Identificación</div>' +
@@ -668,8 +669,9 @@
       campo('pDesc', 'Descripción', p.descripcion, { clase: 'todo', area: true, ph: 'Medidas, material, uso…' }) +
 
       (!nuevo ? '<div class="seccion-form">Estado</div>' + campoLista('pEstado', 'Estado', [['ACTIVO', 'Activo'], ['INACTIVO', 'Inactivo']], p.estado || 'ACTIVO') : '') +
-      (nuevo && ctx.sucursal ? '<div class="campo todo"><label class="check"><input type="checkbox" id="pAsignar" checked><span><b>Asignarlo también a «' +
-        esc(ctx.sucursal.nombre) + '»</b><small>Así aparece de inmediato en esa sucursal. Los precios se cargan en Productos de la sucursal.</small></span></label></div>' : '') +
+      (nuevo && alcanceNuevo.sucursales.length ? '<div class="seccion-form">Asignar a sucursales</div>' +
+        '<p class="nota todo">Marque dónde se venderá o guardará. Los precios se cargan después en Productos de la sucursal.</p>' +
+        '<div class="todo">' + destinosHtml(ctx.sucursal, alcanceNuevo, { libre: true }) + '</div>' : '') +
       '</div><div class="f-msg"></div>';
 
     const f = modalAncho({
@@ -837,18 +839,22 @@
       filas.filter(x => !x.id).forEach(x => registros.push({ tabla: 'PRODUCTO_IMAGENES',
         fila: { id: U.uuid(), producto_id: id, url: x.url, orden: x.orden, estado: 'ACTIVO' } }));
 
-      const asignar = nuevo && $('#pAsignar', f) && $('#pAsignar', f).checked && App.contexto.sucursal;
-      if (asignar) {
-        const s = App.contexto.sucursal;
-        registros.push({ tabla: 'PRODUCTOS_SUCURSAL', fila: { id: U.uuid(), empresa_id: s.empresa_id, sucursal_id: s.id, producto_id: id,
-          ubicacion: '', stock_minimo: '', producto_especial: 'NO', estado: 'ACTIVO' } });
+      const destinos = nuevo ? $$('input[name="aDest"]:checked', f).map(i => i.value) : [];
+      if (destinos.length) {
+        const todas = await Datos.listar('SUCURSALES');
+        destinos.forEach(sid => {
+          const s = todas.find(x => mismo(x.id, sid));
+          if (s) registros.push({ tabla: 'PRODUCTOS_SUCURSAL', fila: { id: U.uuid(), empresa_id: s.empresa_id, sucursal_id: s.id, producto_id: id,
+            ubicacion: '', stock_minimo: '', producto_especial: 'NO', estado: 'ACTIVO' } });
+        });
       }
+      const asignar = destinos.length;
       if (!nuevo && registros.length === 1 && Object.keys(registros[0].fila).length === 1) {
         App.aviso('Sin cambios', 'info');
         return true;
       }
       await Datos.guardarVarios(registros);
-      App.aviso(nuevo ? 'Producto creado' + (asignar ? ' y asignado a ' + App.contexto.sucursal.nombre : '') : 'Producto guardado', 'ok');
+      App.aviso(nuevo ? 'Producto creado' + (asignar ? ' y asignado a ' + asignar + ' sucursal(es)' : '') : 'Producto guardado', 'ok');
       await App.refrescarContexto();
       return true;
     } catch (err) {
@@ -1081,17 +1087,47 @@
     }).filter(Boolean);
   }
 
+  // Empresa y sucursal que se están viendo en "Productos de la sucursal" (independiente de la barra de arriba)
+  const vistaPS = { empresaId: '', sucursalId: '' };
+  const ordenSuc = (a, b) => (b.es_central === 'SI') - (a.es_central === 'SI') || porNombre(a, b);
+
+  /** Empresas y sucursales donde el usuario maneja productos. AG: todas. ADMINISTRADOR: las de su empresa. ALMACEN: las suyas. */
+  async function alcanceSucursales() {
+    if (esAG()) {
+      const empresas = (await Datos.listar('EMPRESAS', activo)).sort(porNombre);
+      const ids = new Set(empresas.map(e => String(e.id)));
+      const sucursales = (await Datos.listar('SUCURSALES', s => activo(s) && ids.has(String(s.empresa_id)))).sort(ordenSuc);
+      return { empresas: empresas, sucursales: sucursales };
+    }
+    const ctx = App.contexto;
+    return { empresas: ctx.empresa ? [ctx.empresa] : [], sucursales: ctx.sucursales.slice().sort(ordenSuc) };
+  }
+  async function sucursalPS() {
+    const a = await alcanceSucursales();
+    let s = a.sucursales.find(x => mismo(x.id, vistaPS.sucursalId));
+    if (!s && vistaPS.empresaId) s = a.sucursales.find(x => mismo(x.empresa_id, vistaPS.empresaId));
+    if (!s && App.contexto.sucursal) s = a.sucursales.find(x => mismo(x.id, App.contexto.sucursal.id));
+    if (!s) s = a.sucursales[0] || null;
+    if (s) { vistaPS.sucursalId = s.id; vistaPS.empresaId = s.empresa_id; }
+    return { suc: s, alcance: a };
+  }
+  const nombreEmpresa = (a, id) => (a.empresas.find(e => mismo(e.id, id)) || {}).nombre || '';
+
   App.pantalla('productos-sucursal', {
     refrescar: true,
     async render(el) {
-      const ctx = App.contexto;
-      const suc = ctx.sucursal;
+      const { suc, alcance } = await sucursalPS();
       const raiz = contenedor(el);
       if (!suc) {
         raiz.innerHTML = '<div class="titulo"><div><h1>Productos de la sucursal</h1></div></div>' +
-          vacio('store', 'Elija una sucursal (botón de arriba) para ver sus productos.');
+          vacio('store', esAG() ? 'Todavía no hay empresas con sucursales activas.' : 'No tiene sucursales asignadas. Pida al administrador que le asigne una.');
         return;
       }
+      const sucsEmpresa = alcance.sucursales.filter(x => mismo(x.empresa_id, suc.empresa_id));
+      const selectores = (esAG() && alcance.empresas.length > 1 ? '<div class="campo"><label for="psEmp">Empresa</label>' +
+          lista('psEmp', alcance.empresas.map(e => [e.id, e.nombre]), suc.empresa_id) + '</div>' : '') +
+        (sucsEmpresa.length > 1 ? '<div class="campo"><label for="psSuc">Sucursal</label>' +
+          lista('psSuc', sucsEmpresa.map(x => [x.id, x.nombre + (x.es_central === 'SI' ? ' (central)' : '')]), suc.id) + '</div>' : '');
       const c = await cargar();
       const items = await itemsSucursal(suc.id);
       const act = items.filter(i => i.activo);
@@ -1103,11 +1139,12 @@
         '<span>' + titulo + '</span><b class="cifra' + (clase ? ' ' + clase : '') + '">' + cifra + '</b></button>';
 
       raiz.innerHTML =
-        '<div class="titulo"><div><h1>Productos de la sucursal</h1><p>' + esc(suc.nombre) +
+        '<div class="titulo"><div><h1>Productos de la sucursal</h1><p>' + (esAG() ? esc(nombreEmpresa(alcance, suc.empresa_id)) + ' · ' : '') + esc(suc.nombre) +
         (suc.es_central === 'SI' ? ' (central)' : '') + ' · stock en unidades, precios en Bs.</p></div>' +
         '<div class="acciones-fila">' +
-        (esAG() && ctx.sucursales.length > 1 ? '<button class="btn btn-borde" data-acc="copiar">' + icoX('copiar') + 'Copiar de otra sucursal</button>' : '') +
+        (esAG() && alcance.sucursales.length > 1 ? '<button class="btn btn-borde" data-acc="copiar">' + icoX('copiar') + 'Copiar de otra sucursal</button>' : '') +
         '<button class="btn btn-principal" data-acc="asignar">' + icoX('mas') + 'Asignar productos</button></div></div>' +
+        (selectores ? '<div class="filtros selector-suc">' + selectores + '</div>' : '') +
         (!editaPrecios() ? '<div class="msg msg-info">Su rol puede ver costos y precios, pero no cambiar los precios.</div>' : '') +
         '<div class="tiles">' +
         tile('TODOS', 'Asignados', act.length) +
@@ -1131,7 +1168,7 @@
         const cont = $('#psLista', raiz);
         if (!items.length) {
           cont.innerHTML = vacio('box', '<b>Esta sucursal todavía no tiene productos.</b><br>Use <b>Asignar productos</b> para elegirlos del catálogo general' +
-            (esAG() && ctx.sucursales.length > 1 ? ' o <b>Copiar de otra sucursal</b>.' : '.'),
+            (esAG() && alcance.sucursales.length > 1 ? ' o <b>Copiar de otra sucursal</b>.' : '.'),
             '<button class="btn btn-principal" data-acc="asignar" style="margin-top:12px">' + icoX('mas') + 'Asignar productos</button>');
           return;
         }
@@ -1188,9 +1225,12 @@
         if (!r) return;
         iBuscar.value = ''; fPS.buscar = '';
         await pintar();
-        abrirEnSucursal(r.producto);
+        abrirEnSucursal(r.producto, suc);
       };
       $('#psCat', raiz).onchange = e => { fPS.categoria = e.target.value; fPS.limite = 50; pintar(); };
+      const sEmp = $('#psEmp', raiz), sSuc = $('#psSuc', raiz);
+      if (sEmp) sEmp.onchange = () => { vistaPS.empresaId = sEmp.value; vistaPS.sucursalId = ''; fPS.limite = 50; App.refrescarContexto(); };
+      if (sSuc) sSuc.onchange = () => { vistaPS.sucursalId = sSuc.value; fPS.limite = 50; App.refrescarContexto(); };
       $('#psVista', raiz).onchange = e => { fPS.vista = e.target.value; fPS.limite = 50; App.refrescarContexto(); };
 
       raiz.onclick = async ev => {
@@ -1200,8 +1240,8 @@
         if (!b) return;
         ev.stopPropagation();
         switch (b.dataset.acc) {
-          case 'asignar': return asignarProductos();
-          case 'copiar': return esAG() ? copiarDeSucursal() : null;
+          case 'asignar': return asignarProductos(suc, alcance);
+          case 'copiar': return esAG() ? copiarDeSucursal(suc, alcance) : null;
           case 'mas': fPS.limite += 100; return pintar();
           case 'editar': {
             const i = items.find(x => mismo(x.ps.id, b.dataset.id));
@@ -1213,8 +1253,8 @@
   });
 
   /** Abre el producto en la sucursal activa; si no está asignado, ofrece asignarlo. */
-  async function abrirEnSucursal(p) {
-    const suc = App.contexto.sucursal;
+  async function abrirEnSucursal(p, suc) {
+    suc = suc || App.contexto.sucursal;
     if (!suc || !manejaSucursal()) return;
     const ps = (await Datos.listar('PRODUCTOS_SUCURSAL', x => mismo(x.sucursal_id, suc.id) && mismo(x.producto_id, p.id)))[0];
     if (ps && activo(ps)) return formPS(ps, p);
@@ -1231,8 +1271,8 @@
   }
 
   async function formPS(ps, p) {
-    const suc = App.contexto.sucursal;
-    if (!suc || !mismo(ps.sucursal_id, suc.id)) { App.aviso('Este producto es de otra sucursal.', 'error'); return; }
+    const suc = await Datos.obtener('SUCURSALES', ps.sucursal_id);
+    if (!suc) { App.aviso('No se encontró la sucursal de este producto. Sincronice e intente de nuevo.', 'error'); return; }
     const c = await cargar();
     const precios = editaPrecios();
     const costoEditable = precios;
@@ -1298,7 +1338,7 @@
     const f = modalAncho({
       titulo: p.codigo + ' · ' + suc.nombre,
       html: html,
-      botones: [{ t: 'Cancelar' }, { t: 'Guardar', clase: 'btn-principal', accion: m => guardarPS(m, ps, p, { precios: precios, costoEditable: costoEditable, stock: stock, puedeInicial: puedeInicial }) }]
+      botones: [{ t: 'Cancelar' }, { t: 'Guardar', clase: 'btn-principal', accion: m => guardarPS(m, ps, p, { suc: suc, precios: precios, costoEditable: costoEditable, stock: stock, puedeInicial: puedeInicial }) }]
     });
 
     // Ganancia en vivo
@@ -1477,7 +1517,7 @@
 
   async function guardarPS(f, ps, p, op) {
     try {
-      const suc = App.contexto.sucursal;
+      const suc = op.suc;
       const nuevo = {
         ubicacion: txt($('#sUbic', f).value),
         stock_minimo: leerNumero(f, 'sMin', 'el stock mínimo', { dec: 3 }),
@@ -1546,8 +1586,8 @@
   }
 
   // ---------- Asignar productos del catálogo ----------
-  async function asignarProductos() {
-    const suc = App.contexto.sucursal;
+  async function asignarProductos(suc, alcance) {
+    alcance = alcance || await alcanceSucursales();
     const c = await cargar();
     const filas = await Datos.listar('PRODUCTOS_SUCURSAL', x => mismo(x.sucursal_id, suc.id));
     const porProd = new Map(filas.map(x => [String(x.producto_id), x]));
@@ -1573,6 +1613,9 @@
         '<button type="button" class="btn btn-chico btn-borde" id="aNinguno">Quitar todas las marcas</button>' +
         '<b id="aCuenta">0 marcados</b></div>' +
         '<div class="lista-sel" id="aLista"></div>' +
+        (alcance.sucursales.length > 1 ? '<div class="seccion-form" style="margin-top:14px">Asignar en</div>' +
+          '<p class="nota">Puede asignar los mismos productos a varias sucursales' + (esAG() ? ' y empresas' : '') + ' a la vez. ' +
+          'Donde ya estén asignados, no se cambian.</p>' + destinosHtml(suc, alcance) : '') +
         '<div class="form-2" style="margin-top:14px"><div class="seccion-form">Datos iniciales (opcional, para todos los marcados)</div>' +
         campo('aUbic', 'Ubicación', '', { ph: 'Ej. Depósito', attrs: ' maxlength="60"' }) +
         campoNum('aMin', 'Stock mínimo', '', { ayuda: 'Los precios se cargan después, producto por producto (o por Excel en la Fase 6).' }) +
@@ -1628,19 +1671,29 @@
         if (!sel.size) return mensaje(m, 'Marque al menos un producto.');
         const ubic = txt($('#aUbic', m).value);
         const min = leerNumero(m, 'aMin', 'el stock mínimo', { dec: 3 });
-        const registros = Array.from(sel).map(pid => {
-          const ant = porProd.get(pid);
+        const marcadas = $$('input[name="aDest"]:checked', m).map(i => i.value);
+        const destinos = alcance.sucursales.filter(x => mismo(x.id, suc.id) || marcadas.indexOf(String(x.id)) >= 0);
+        if (!destinos.length) return mensaje(m, 'Marque al menos una sucursal.');
+        const ids = new Set(destinos.map(x => String(x.id)));
+        const existentes = new Map((await Datos.listar('PRODUCTOS_SUCURSAL', x => ids.has(String(x.sucursal_id))))
+          .map(x => [x.sucursal_id + '|' + x.producto_id, x]));
+        const registros = [];
+        destinos.forEach(d => Array.from(sel).forEach(pid => {
+          const ant = existentes.get(d.id + '|' + pid);
+          if (ant && activo(ant)) return;                 // ya asignado ahí: no se toca
           if (ant) {
             const fila = { id: ant.id, estado: 'ACTIVO', _origen: 'MANUAL' };
             if (ubic) fila.ubicacion = ubic;
             if (min !== '') fila.stock_minimo = min;
-            return { tabla: 'PRODUCTOS_SUCURSAL', fila: fila };
+            registros.push({ tabla: 'PRODUCTOS_SUCURSAL', fila: fila });
+            return;
           }
-          return { tabla: 'PRODUCTOS_SUCURSAL', fila: { id: U.uuid(), empresa_id: suc.empresa_id, sucursal_id: suc.id, producto_id: pid,
-            ubicacion: ubic, stock_minimo: min, producto_especial: 'NO', estado: 'ACTIVO' } };
-        });
+          registros.push({ tabla: 'PRODUCTOS_SUCURSAL', fila: { id: U.uuid(), empresa_id: d.empresa_id, sucursal_id: d.id, producto_id: pid,
+            ubicacion: ubic, stock_minimo: min, producto_especial: 'NO', estado: 'ACTIVO' } });
+        }));
+        if (!registros.length) return mensaje(m, 'Esos productos ya estaban asignados en todas las sucursales marcadas.');
         await Datos.guardarVarios(registros);
-        App.aviso(registros.length + ' producto(s) asignado(s) a ' + suc.nombre, 'ok');
+        App.aviso(registros.length + ' asignación(es) guardadas en ' + destinos.length + ' sucursal(es)', 'ok');
         await App.refrescarContexto();
         return true;
       } catch (err) {
@@ -1650,11 +1703,31 @@
     }
   }
 
+  /** Casillas de sucursales destino (agrupadas por empresa para el administrador general). */
+  function destinosHtml(suc, alcance, op) {
+    op = op || {};
+    const grupos = alcance.empresas.filter(e => alcance.sucursales.some(x => mismo(x.empresa_id, e.id)));
+    return grupos.map(e => {
+      const sucs = alcance.sucursales.filter(x => mismo(x.empresa_id, e.id));
+      return (grupos.length > 1 ? '<div class="dest-empresa"><b>' + esc(e.nombre) + '</b>' +
+          '<button type="button" class="btn btn-chico btn-borde" data-dest-todas="' + esc(e.id) + '">Todas</button></div>' : '') +
+        '<div class="checks" style="margin-bottom:10px">' + sucs.map(x => '<label class="check"><input type="checkbox" name="aDest" value="' + esc(x.id) + '" data-emp="' + esc(x.empresa_id) + '"' +
+          (suc && mismo(x.id, suc.id) ? (op.libre ? ' checked' : ' checked disabled') : '') + '><span><b>' + esc(x.nombre) + '</b><small>' + esc(x.codigo || '') +
+          (x.es_central === 'SI' ? ' · Central' : '') + (!op.libre && suc && mismo(x.id, suc.id) ? ' · la que está viendo' : '') + '</small></span></label>').join('') + '</div>';
+    }).join('') + (grupos.length > 1 || alcance.sucursales.length > 2 ? '<button type="button" class="btn btn-chico btn-borde" data-dest-todas="*">Marcar todas</button>' : '');
+  }
+  document.addEventListener('click', ev => {
+    const b = ev.target.closest('[data-dest-todas]');
+    if (!b) return;
+    const modal = b.closest('.modal');
+    $$('input[name="aDest"]:not(:disabled)', modal).filter(i => b.dataset.destTodas === '*' || i.dataset.emp === b.dataset.destTodas)
+      .forEach(i => { i.checked = true; });
+  });
+
   // ---------- Copiar productos de otra sucursal ----------
-  async function copiarDeSucursal() {
-    const ctx = App.contexto;
-    const suc = ctx.sucursal;
-    const otras = ctx.sucursales.filter(s => !mismo(s.id, suc.id));
+  async function copiarDeSucursal(suc, alcance) {
+    alcance = alcance || await alcanceSucursales();
+    const otras = alcance.sucursales.filter(s => !mismo(s.id, suc.id));
     const c = await cargar();
     const destino = new Map((await Datos.listar('PRODUCTOS_SUCURSAL', x => mismo(x.sucursal_id, suc.id))).map(x => [String(x.producto_id), x]));
     const origenDe = async id => (await Datos.listar('PRODUCTOS_SUCURSAL', x => mismo(x.sucursal_id, id) && activo(x)))
@@ -1664,8 +1737,9 @@
       titulo: 'Copiar productos a ' + suc.nombre,
       html: '<p class="nota">Asigna a <b>' + esc(suc.nombre) + '</b> los productos que tiene otra sucursal. ' +
         'Solo agrega los que faltan: los que ya están asignados aquí no se modifican. El stock <b>no</b> se copia.</p>' +
-        '<div class="form-2">' + campoLista('cOrigen', 'Copiar desde', otras.map(s => [s.id, s.nombre + (s.es_central === 'SI' ? ' (central)' : '')]),
-          (otras.find(s => s.es_central === 'SI') || otras[0]).id, { clase: 'todo' }) +
+        '<div class="form-2">' + campoLista('cOrigen', 'Copiar desde', otras.map(s => [s.id, (alcance.empresas.length > 1 ? nombreEmpresa(alcance, s.empresa_id) + ' › ' : '') +
+          s.nombre + (s.es_central === 'SI' ? ' (central)' : '')]),
+          (otras.find(s => s.es_central === 'SI' && mismo(s.empresa_id, suc.empresa_id)) || otras.find(s => mismo(s.empresa_id, suc.empresa_id)) || otras[0]).id, { clase: 'todo' }) +
         '<div class="campo todo"><label>Copiar también</label><div class="checks">' +
         (editaPrecios() ? '<label class="check"><input type="checkbox" id="cPrecios" checked><span><b>Precios</b><small>Unidad, mayor y caja</small></span></label>' +
           '<label class="check"><input type="checkbox" id="cCosto" checked><span><b>Costo</b><small>Costo promedio actual</small></span></label>' : '') +
