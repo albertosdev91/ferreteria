@@ -441,3 +441,35 @@ button.tile:hover { border-color: var(--naranja); }
 .selector-suc { padding: 10px 12px; border: 1px solid var(--borde); border-radius: var(--radio); background: #fff; }
 .selector-suc .campo { flex: 1 1 220px; }
 .dest-empresa { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 6px 0; color: var(--azul); }
+
+/* Fase 5.4 — copiar entre sucursales (origen → destino) */
+.cp-flujo { display: grid; grid-template-columns: 1fr 120px 1fr; gap: 10px; align-items: center; margin: 6px 0 14px; }
+.cp-caja { border: 2px solid var(--borde); border-radius: 12px; padding: 12px 12px 4px; background: #fafbfd; }
+.cp-caja.O { border-color: #c9cee0; }
+.cp-caja.D { border-color: var(--naranja); background: #fff8ee; }
+.cp-titulo { display: block; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--suave); margin-bottom: 8px; }
+.cp-caja .campo { margin-bottom: 10px; }
+.cp-dato { font-size: 13px; color: var(--suave); margin-bottom: 8px; }
+.cp-dato b { color: var(--azul); }
+.cp-flecha { display: flex; flex-direction: column; align-items: center; color: var(--naranja); }
+.cp-flecha svg { width: 100%; height: 40px; fill: none; stroke: currentColor; stroke-width: 5; stroke-linecap: round; stroke-linejoin: round; }
+.cp-flecha b { font-size: 26px; color: var(--azul); line-height: 1; margin-top: 2px; }
+.cp-flecha small { font-size: 12px; color: var(--suave); }
+.cp-igual .cp-flecha { color: var(--rojo); }
+@media (max-width: 599px) {
+  .cp-flujo { grid-template-columns: 1fr; }
+  .cp-flecha svg { width: 60px; transform: rotate(90deg); margin: 8px 0; }
+}
+
+/* Fase 5.4 — imprimir lista */
+.l-sugerencias { display: grid; gap: 4px; margin-top: 6px; }
+.l-sug { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; padding: 6px 10px; border: 1px solid var(--borde); border-radius: 10px; background: #fff; cursor: pointer; font: inherit; color: inherit; }
+.l-sug:hover { border-color: var(--naranja); }
+.l-sug span { flex: 1; min-width: 0; }
+.l-sug b { display: block; color: var(--azul); font-size: 14px; }
+.l-sug small { display: block; color: var(--suave); font-size: 12px; }
+.l-sug em { font-style: normal; font-size: 12.5px; color: var(--verde); white-space: nowrap; }
+.l-sug .mini { width: 34px; height: 34px; }
+.l-elegidos { margin-top: 8px; max-height: 38vh; }
+.l-elegidos .fila-sel { cursor: default; }
+.l-elegidos .btn-icono { color: var(--rojo); }
