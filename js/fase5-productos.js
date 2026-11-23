@@ -499,8 +499,6 @@
         '<input class="entrada" id="catBuscar" data-foco placeholder="Ej. martillo 16, stanley" value="' + esc(fCat.buscar) + '" autocomplete="off" enterkeyhint="search"></div>' +
         '<div class="campo corto"><label for="catCat">Categoría</label>' +
         lista('catCat', [['', 'Todas']].concat(arbolCategorias(c, { inactivas: true }).map(x => [x[0], x[1]])), fCat.categoria) + '</div>' +
-        '<div class="campo corto"><label for="catMarca">Marca</label>' +
-        lista('catMarca', [['', 'Todas']].concat(c.marcas.slice().sort(porNombre).map(m => [m.id, m.nombre + (activo(m) ? '' : ' (inactiva)')])), fCat.marca) + '</div>' +
         '<div class="campo corto"><label for="catUso">Uso / profesión</label>' + lista('catUso', opcionesUsos(c), fCat.uso) + '</div>' +
         '<div class="campo corto"><label for="catEstado">Mostrar</label>' +
         lista('catEstado', [['ACTIVO', 'Activos'], ['INACTIVO', 'Inactivos'], ['TODOS', 'Todos']], fCat.estado) + '</div></div>' +
@@ -513,7 +511,7 @@
         const vista = (await buscar(fCat.buscar, {
           inactivos: true,
           categorias: fCat.categoria ? descendientes(c, fCat.categoria) : null, uso: fCat.uso,
-          marca: fCat.marca
+          marca: ''
         })).filter(p => fCat.estado === 'TODOS' || (fCat.estado === 'INACTIVO') === (p.estado === 'INACTIVO'));
         const cont = $('#catLista', raiz);
         if (!c.productos.length) {
@@ -565,7 +563,6 @@
         if (r) { fCat.buscar = ''; iBuscar.value = ''; await pintar(); formProducto(r.producto); }
       };
       $('#catCat', raiz).onchange = e => { fCat.categoria = e.target.value; fCat.limite = 50; pintar(); };
-      $('#catMarca', raiz).onchange = e => { fCat.marca = e.target.value; fCat.limite = 50; pintar(); };
       $('#catUso', raiz).onchange = e => { fCat.uso = e.target.value; fCat.limite = 50; pintar(); };
       $('#catEstado', raiz).onchange = e => { fCat.estado = e.target.value; fCat.limite = 50; pintar(); };
 
@@ -2138,9 +2135,8 @@
         '<p class="nota" style="margin:-4px 0 10px">Ej.: <b>martillo 16</b> · <b>martillo, stanley</b> · <b>, truper</b> (todo de una marca) · o escanee el código. Atajo: tecla <b>F2</b> desde cualquier pantalla.</p>' +
         '<div class="filtros">' +
         '<div class="campo corto"><label for="bCat">Categoría</label>' + lista('bCat', [['', 'Todas']].concat(arbolCategorias(c).map(x => [x[0], x[1]])), fBus.categoria) + '</div>' +
-        '<div class="campo corto"><label for="bMarca">Marca</label>' + lista('bMarca', opcionesMarcasFiltro(c), fBus.marca) + '</div>' +
         '<div class="campo corto"><label for="bUso">Uso / profesión</label>' + lista('bUso', opcionesUsos(c), fBus.uso) + '</div>' +
-        (fBus.categoria || fBus.marca || fBus.uso ? '<button class="btn btn-borde" data-acc="limpiar">Quitar filtros</button>' : '') + '</div>' +
+        (fBus.categoria || fBus.uso ? '<button class="btn btn-borde" data-acc="limpiar">Quitar filtros</button>' : '') + '</div>' +
         (suc ? '<label class="check chico" style="margin:-4px 0 14px"><input type="checkbox" id="bTodo"' + (fBus.todo ? ' checked' : '') + '>' +
           '<span>Incluir productos del catálogo que no están en esta sucursal</span></label>' : '') +
         '<div id="bRes"></div>';
@@ -2149,7 +2145,7 @@
 
       const pintar = async () => {
         const cont = $('#bRes', raiz);
-        const hayFiltro = fBus.categoria || fBus.marca || fBus.uso;
+        const hayFiltro = fBus.categoria || fBus.uso;
         if (!txt(fBus.q) && !hayFiltro) {
           cont.innerHTML = '<div class="tarjeta vacio">' + ico('search') + '<p><b>¿Qué producto busca?</b><br>Puede escribir parte del nombre en cualquier orden ' +
             '(ej. <i>clavo 2</i>), el código interno o el código de barras.</p>' +
@@ -2157,7 +2153,7 @@
           return;
         }
         const ids = todo ? null : new Set(Array.from(asignados.values()).filter(activo).map(x => String(x.producto_id)));
-        const lista2 = await buscar(fBus.q, { ids: ids, marca: fBus.marca, uso: fBus.uso, categorias: fBus.categoria ? descendientes(c, fBus.categoria) : null });
+        const lista2 = await buscar(fBus.q, { ids: ids, uso: fBus.uso, categorias: fBus.categoria ? descendientes(c, fBus.categoria) : null });
         if (!lista2.length) {
           const cod = codigoLimpio(fBus.q);
           cont.innerHTML = vacio('search', (txt(fBus.q) ? 'No se encontró «' + esc(fBus.q) + '»' : 'Ningún producto con esos filtros') +
@@ -2187,7 +2183,7 @@
           (lista2.length > mostrar.length ? '<div class="mas-centro"><button class="btn btn-borde" data-acc="mas">Mostrar más (' + (lista2.length - mostrar.length) + ')</button></div>'
             : '<p class="nota" style="margin-top:10px">' + lista2.length + ' producto(s).</p>');
       };
-      [['bCat', 'categoria'], ['bMarca', 'marca'], ['bUso', 'uso']].forEach(([id, k]) => {
+      [['bCat', 'categoria'], ['bUso', 'uso']].forEach(([id, k]) => {
         $('#' + id, raiz).onchange = e => { fBus[k] = e.target.value; fBus.limite = 30; App.refrescarContexto(); };
       });
       await pintar();
