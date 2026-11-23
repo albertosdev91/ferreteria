@@ -183,8 +183,9 @@
 
   async function cargar() {
     if (cache) return cache;
-    const [productos, marcas, categorias, imagenes] = await Promise.all([
-      Datos.listar('PRODUCTOS'), Datos.listar('MARCAS'), Datos.listar('CATEGORIAS'), Datos.listar('PRODUCTO_IMAGENES', activo)
+    const [productos, marcas, categorias, imagenes, archivos] = await Promise.all([
+      Datos.listar('PRODUCTOS'), Datos.listar('MARCAS'), Datos.listar('CATEGORIAS'), Datos.listar('PRODUCTO_IMAGENES', activo),
+      Datos.listar('ARCHIVOS', activo)
     ]);
     productos.sort((a, b) => (a.estado === 'INACTIVO') - (b.estado === 'INACTIVO') || porNombre(a, b));
     const porId = new Map(productos.map(p => [String(p.id), p]));
@@ -192,7 +193,8 @@
     const catPorId = new Map(categorias.map(x => [String(x.id), x]));
     const codigos = new Map();      // código de barras → { producto, presentacion }
     const internos = new Map();     // código interno → producto
-    const texto = new Map();        // texto para buscar
+    const texto = new Map();        // texto para buscar (código, nombre, códigos de barras)
+    const indice = [];              // lista preparada para buscar rápido
     productos.forEach(p => {
       PRESENTACIONES.forEach(([col, pres]) => {
         const k = codigoClave(p[col]);
@@ -201,9 +203,13 @@
       const k = codigoClave(p.codigo);
       if (k && !internos.has(k)) internos.set(k, p);
       const m = marcaPorId.get(String(p.marca_id));
-      texto.set(String(p.id), norm([p.codigo, p.nombre, m && m.nombre, p.codigo_barras_unidad, p.codigo_barras_paquete,
-        p.codigo_barras_caja].join(' ')));
+      const t = norm([p.codigo, p.nombre, p.codigo_barras_unidad, p.codigo_barras_paquete, p.codigo_barras_caja].join(' '));
+      texto.set(String(p.id), t);
+      indice.push({ p: p, t: t, marca: norm(m && m.nombre), ncod: norm(p.codigo), nnom: norm(p.nombre),
+        claves: [codigoClave(p.codigo)].concat(PRESENTACIONES.map(([col]) => codigoClave(p[col]))).filter(Boolean) });
     });
+    const rutas = new Map();        // ruta de imagen (minúsculas) → fila de ARCHIVOS
+    archivos.forEach(a => { if (a.archivo_id) rutas.set(String(a.ruta || a.id).toLowerCase(), a); });
     const imgs = new Map();
     imagenes.sort((a, b) => n0(a.orden) - n0(b.orden)).forEach(i => {
       const k = String(i.producto_id);
@@ -218,7 +224,7 @@
     };
     cache = {
       productos: productos, porId: porId, marcas: marcas, categorias: categorias, marcaPorId: marcaPorId, catPorId: catPorId,
-      codigos: codigos, internos: internos, texto: texto, imagenes: imgs, rutaCategoria: rutaCategoria,
+      codigos: codigos, internos: internos, texto: texto, indice: indice, imagenes: imgs, rutas: rutas, rutaCategoria: rutaCategoria,
       nombreMarca: id => { const m = marcaPorId.get(String(id)); return m ? m.nombre : ''; }
     };
     return cache;
@@ -241,27 +247,45 @@
     return p ? { producto: p, presentacion: 'UNIDAD', factor: 1, por: 'codigo' } : null;
   }
 
+  /**
+   * Separa la búsqueda: lo que va antes de la coma busca en código, códigos de barras y nombre;
+   * lo que va después de la coma filtra por marca.  Ej.: "martillo 16, stanley"
+   */
+  function partirConsulta(q) {
+    const s = String(q == null ? '' : q);
+    const i = s.indexOf(',');
+    return i < 0 ? { texto: s, marca: '' } : { texto: s.slice(0, i), marca: s.slice(i + 1) };
+  }
+
   /** Busca por palabras (en cualquier orden). op: { ids: Set, inactivos, categorias: Set, marca } */
   async function buscar(q, op) {
     op = op || {};
     const c = await cargar();
-    const palabras = norm(q).split(/\s+/).filter(Boolean);
-    const kq = codigoClave(q);
-    const nq = norm(q);
+    const partes = partirConsulta(q);
+    const palabras = norm(partes.texto).split(/\s+/).filter(Boolean);
+    const marcas = norm(partes.marca).split(/\s+/).filter(Boolean);
+    const kq = codigoClave(partes.texto);
+    const nq = norm(partes.texto);
     const r = [];
-    c.productos.forEach(p => {
-      if (!op.inactivos && !activo(p)) return;
-      if (op.ids && !op.ids.has(String(p.id))) return;
-      if (op.categorias && !op.categorias.has(String(p.categoria_id))) return;
-      if (op.marca && !mismo(p.marca_id, op.marca)) return;
-      const t = c.texto.get(String(p.id)) || '';
-      if (palabras.some(w => t.indexOf(w) < 0)) return;
+    for (let i = 0; i < c.indice.length; i++) {
+      const x = c.indice[i], p = x.p;
+      if (!op.inactivos && p.estado === 'INACTIVO') continue;
+      if (op.ids && !op.ids.has(String(p.id))) continue;
+      if (op.categorias && !op.categorias.has(String(p.categoria_id))) continue;
+      if (op.marca && !mismo(p.marca_id, op.marca)) continue;
+      let ok = true;
+      for (let j = 0; j < palabras.length; j++) if (x.t.indexOf(palabras[j]) < 0) { ok = false; break; }
+      if (!ok) continue;
+      for (let j = 0; j < marcas.length; j++) if (x.marca.indexOf(marcas[j]) < 0) { ok = false; break; }
+      if (!ok) continue;
       let rango = 3;
-      if (kq && (codigoClave(p.codigo) === kq || PRESENTACIONES.some(([col]) => codigoClave(p[col]) === kq))) rango = 0;
-      else if (nq && norm(p.codigo).indexOf(nq) === 0) rango = 1;
-      else if (nq && norm(p.nombre).indexOf(nq) === 0) rango = 2;
+      if (kq && x.claves.indexOf(kq) >= 0) rango = 0;
+      else if (nq && x.ncod.indexOf(nq) === 0) rango = 1;
+      else if (nq && x.nnom.indexOf(nq) === 0) rango = 2;
       r.push({ p: p, rango: rango });
-    });
+    }
+    // Sin coma y sin resultados: probar lo escrito como marca (ej. "stanley")
+    if (!r.length && palabras.length && !marcas.length && !op.sinMarca) return buscar(', ' + partes.texto, Object.assign({}, op, { sinMarca: true }));
     r.sort((a, b) => a.rango - b.rango || porNombre(a.p, b.p));
     return r.map(x => x.p);
   }
@@ -296,15 +320,98 @@
     return s;
   }
 
+  // ---------- Imágenes por rutas ----------
+  // Las imágenes se guardan en Google Drive: Mi Unidad > APP-WEB > IMAGENES > PRODUCTOS > CODIGO.png
+  // En la hoja se guarda la RUTA (ej. IMAGENES/PRODUCTOS/AMR104.png). La pestaña ARCHIVOS dice
+  // qué archivo de Drive corresponde a cada ruta. Sin imagen → IMAGENES/no-img.jpg
+  const RUTA_PRODUCTOS = 'IMAGENES/PRODUCTOS';
+  const RUTA_SIN_IMAGEN = 'IMAGENES/no-img.jpg';
+  const EXT_IMG = ['png', 'jpg', 'jpeg', 'webp'];
+  const esUrl = v => /^https?:\/\//i.test(txt(v));
+  const esRuta = v => /^[^\/]+(\/[^\/]+)+\.(png|jpe?g|webp|gif)$/i.test(txt(v));
+  const nombreArchivo = codigo => txt(codigo).replace(/[\\\/:*?"<>|\s]+/g, '-');
+  const urlDrive = id => 'https://lh3.googleusercontent.com/d/' + id;
+
+  /** URL para mostrar una ruta (IMAGENES/…) o un enlace (https://…). '' si no existe. */
+  function urlDe(valor, c) {
+    const v = txt(valor);
+    if (!v) return '';
+    if (esUrl(v)) return App.urlImagen(v);
+    c = c || cache;
+    const a = c && c.rutas.get(v.toLowerCase());
+    return a ? urlDrive(a.archivo_id) : '';
+  }
+  /** Imagen del producto: la suya → la que está en Drive con su código → la primera extra → no-img.jpg */
   function imagenDe(p, c) {
     if (!p) return '';
-    if (txt(p.imagen_principal_url)) return App.urlImagen(p.imagen_principal_url);
-    const ex = c && c.imagenes.get(String(p.id));
-    return ex && ex.length ? App.urlImagen(ex[0].url) : '';
+    c = c || cache;
+    let u = urlDe(p.imagen_principal_url, c);
+    if (!u && c) {
+      const base = RUTA_PRODUCTOS + '/' + nombreArchivo(p.codigo) + '.';
+      for (let i = 0; i < EXT_IMG.length && !u; i++) u = urlDe(base + EXT_IMG[i], c);
+    }
+    if (!u && c) {
+      const ex = c.imagenes.get(String(p.id)) || [];
+      for (let i = 0; i < ex.length && !u; i++) u = urlDe(ex[i].url, c);
+    }
+    return u || urlDe(RUTA_SIN_IMAGEN, c);
   }
   function miniatura(p, c, clase) {
     const u = imagenDe(p, c);
     return '<span class="mini' + (clase ? ' ' + clase : '') + '">' + (u ? '<img src="' + esc(u) + '" alt="" loading="lazy" onerror="this.remove()">' : '') + '</span>';
+  }
+
+  /** Achica la foto (máx. 1200 px) y la devuelve en base64, manteniendo PNG / JPG / WEBP. */
+  async function prepararImagen(archivo) {
+    const tipos = { 'image/png': 'image/png', 'image/jpeg': 'image/jpeg', 'image/jpg': 'image/jpeg', 'image/webp': 'image/webp' };
+    const tipo = tipos[String(archivo.type).toLowerCase()];
+    if (!tipo) throw new Error('Use una imagen PNG o JPG.');
+    const url = URL.createObjectURL(archivo);
+    try {
+      const img = await new Promise((ok, mal) => { const i = new Image(); i.onload = () => ok(i); i.onerror = () => mal(new Error('No se pudo leer la imagen.')); i.src = url; });
+      const max = 1200;
+      const esc2 = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
+      let blob = archivo;
+      if (esc2 < 1 || archivo.size > 1500000) {
+        const cv = document.createElement('canvas');
+        cv.width = Math.round(img.naturalWidth * esc2);
+        cv.height = Math.round(img.naturalHeight * esc2);
+        const g = cv.getContext('2d');
+        if (tipo === 'image/jpeg') { g.fillStyle = '#fff'; g.fillRect(0, 0, cv.width, cv.height); }
+        g.drawImage(img, 0, 0, cv.width, cv.height);
+        blob = await new Promise(ok => cv.toBlob(ok, tipo, 0.85));
+      }
+      const base64 = await new Promise((ok, mal) => {
+        const r = new FileReader();
+        r.onload = () => ok(String(r.result).split(',')[1]);
+        r.onerror = () => mal(new Error('No se pudo leer la imagen.'));
+        r.readAsDataURL(blob);
+      });
+      return { tipo: tipo, base64: base64, bytes: blob.size };
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  }
+
+  /** Sube una foto a Drive (necesita internet). Devuelve la ruta guardada. */
+  async function subirImagen(archivo, codigo, sufijo) {
+    if (!navigator.onLine) throw new Error('Necesita internet para subir imágenes.');
+    const u = Sesion.actual;
+    if (!u.token) throw new Error('Su sesión en el servidor terminó. Vuelva a iniciar sesión con internet.');
+    if (!nombreArchivo(codigo)) throw new Error('Escriba primero el código interno: la imagen se guarda con ese nombre.');
+    const img = await prepararImagen(archivo);
+    let r;
+    try {
+      r = await Api.llamar('subirImagen', { codigo: codigo, sufijo: sufijo || '', tipo: img.tipo, datos: img.base64 }, u.token, { segundos: 120 });
+    } catch (e) {
+      if (e.codigo === 'SESION_INVALIDA') { await Sesion.marcarSesionVencida(); window.dispatchEvent(new CustomEvent('sync-estado')); }
+      if (e.codigo === 'ACCION') throw new Error('El servidor todavía no acepta imágenes: actualice Api.gs (Fase 5.1) y haga una nueva versión de la implementación.');
+      throw e;
+    }
+    await Sesion.local.guardarDelServidor({ ARCHIVOS: [r.archivo] }, false);
+    cache = null;
+    await cargar();
+    return r.ruta;
   }
 
   function descendientes(c, id) {
@@ -340,9 +447,17 @@
     return out;
   }
 
+  // Atajo de teclado: F2 abre "Buscar producto y stock" desde cualquier pantalla
+  document.addEventListener('keydown', ev => {
+    if (ev.key !== 'F2' || !Sesion.actual || document.querySelector('.modal-fondo, .escaner')) return;
+    ev.preventDefault();
+    if (App.actual() === 'buscar') { const i = document.getElementById('bQ'); if (i) { i.focus(); i.select(); } }
+    else App.ir('buscar');
+  });
+
   window.Catalogo = {
     cargar: cargar, porCodigo: porCodigo, buscar: buscar, stocks: stocks, factor: factor, textoStock: textoStock,
-    imagen: imagenDe, normalizar: norm, codigoClave: codigoClave
+    imagen: imagenDe, urlImagen: urlDe, partirConsulta: partirConsulta, normalizar: norm, codigoClave: codigoClave
   };
 
   // ============================================================
@@ -369,10 +484,11 @@
         nActivos + ' producto(s) activo(s).</p></div>' +
         '<div class="acciones-fila"><button class="btn btn-borde" data-acc="categorias">' + icoX('etiqueta') + 'Categorías</button>' +
         '<button class="btn btn-borde" data-acc="marcas">' + icoX('etiqueta') + 'Marcas</button>' +
+        '<button class="btn btn-borde" data-acc="unidades">' + icoX('etiqueta') + 'Unidades</button>' +
         '<button class="btn btn-principal" data-acc="nuevo">' + icoX('mas') + 'Nuevo producto</button></div></div>' +
         '<div class="filtros">' +
-        '<div class="campo"><label for="catBuscar">Buscar (nombre, código o código de barras)</label>' +
-        '<input class="entrada" id="catBuscar" data-foco placeholder="Ej. martillo 16 oz" value="' + esc(fCat.buscar) + '" autocomplete="off" enterkeyhint="search"></div>' +
+        '<div class="campo"><label for="catBuscar">Buscar <small class="suave">(después de una coma: marca)</small></label>' +
+        '<input class="entrada" id="catBuscar" data-foco placeholder="Ej. martillo 16, stanley" value="' + esc(fCat.buscar) + '" autocomplete="off" enterkeyhint="search"></div>' +
         '<div class="campo corto"><label for="catCat">Categoría</label>' +
         lista('catCat', [['', 'Todas']].concat(arbolCategorias(c, { inactivas: true }).map(x => [x[0], x[1]])), fCat.categoria) + '</div>' +
         '<div class="campo corto"><label for="catMarca">Marca</label>' +
@@ -431,7 +547,7 @@
       restaurarFoco(raiz);
 
       let espera = null;
-      iBuscar.oninput = () => { fCat.buscar = iBuscar.value; fCat.limite = 50; clearTimeout(espera); espera = setTimeout(pintar, 150); };
+      iBuscar.oninput = () => { fCat.buscar = iBuscar.value; fCat.limite = 50; clearTimeout(espera); espera = setTimeout(pintar, 60); };
       iBuscar.onkeydown = async ev => {
         if (ev.key !== 'Enter') return;
         ev.preventDefault();
@@ -454,6 +570,7 @@
           case 'estado': return cambiarEstadoProducto(p, nSuc.get(String(p.id)) || 0);
           case 'categorias': return gestionarMaestro('CATEGORIAS');
           case 'marcas': return gestionarMaestro('MARCAS');
+          case 'unidades': return gestionarUnidades();
           case 'mas': fCat.limite += 100; return pintar();
         }
       };
@@ -487,10 +604,10 @@
   }
 
   function filaImagen(url, id) {
-    const u = txt(url) ? App.urlImagen(url) : '';
+    const u = urlDe(url);
     return '<div class="img-fila"' + (id ? ' data-id="' + esc(id) + '"' : '') + '>' +
       '<span class="mini">' + (u ? '<img src="' + esc(u) + '" alt="" onerror="this.remove()">' : '') + '</span>' +
-      '<input class="entrada" value="' + esc(url || '') + '" placeholder="https://drive.google.com/file/d/…" spellcheck="false">' +
+      '<input class="entrada" value="' + esc(url || '') + '" placeholder="IMAGENES/PRODUCTOS/CODIGO-2.jpg o enlace" spellcheck="false">' +
       '<button type="button" class="btn btn-icono" data-quitar title="Quitar" aria-label="Quitar imagen">' + icoX('quitar') + '</button></div>';
   }
 
@@ -500,8 +617,9 @@
     p = p || {};
     const c = await cargar();
     const ctx = App.contexto;
-    let unidades = (await Datos.lista('UNIDAD')).map(x => [x.codigo, x.codigo + ' — ' + x.nombre]);
-    if (!unidades.length) unidades = [['UND', 'UND — Unidad']];
+    let unidades = (await Datos.lista('UNIDAD')).map(x => [x.codigo, x.codigo === x.nombre.toUpperCase() ? x.codigo : x.codigo + ' — ' + x.nombre]);
+    if (!unidades.length) unidades = [['UNIDAD', 'UNIDAD']];
+    const unidadIni = p.unidad || (unidades.some(x => x[0] === 'UNIDAD') ? 'UNIDAD' : unidades[0][0]);
     if (p.unidad && !unidades.some(x => mismo(x[0], p.unidad))) unidades.unshift([p.unidad, p.unidad]);
     const extras = nuevo ? [] : (c.imagenes.get(String(p.id)) || []);
 
@@ -510,7 +628,7 @@
       campo('pCodigo', 'Código interno', nuevo ? sugerirCodigo(c.productos) : p.codigo, { req: true,
         attrs: ' maxlength="30" autocapitalize="characters" spellcheck="false" autocomplete="off"',
         ayuda: 'Único. Letras, números, punto o guion. Se sugiere uno automático.' }) +
-      campoLista('pUnidad', 'Unidad de medida', unidades, p.unidad || 'UND', { ayuda: 'El stock siempre se cuenta en esta unidad.' }) +
+      campoLista('pUnidad', 'Unidad de medida', unidades, unidadIni, { ayuda: 'El stock siempre se cuenta en esta unidad. Para agregar más: botón <b>Unidades</b> del catálogo.' }) +
       campo('pNombre', 'Nombre del producto', p.nombre, { req: true, clase: 'todo', ph: 'Ej. Martillo carpintero 16 oz mango de fibra',
         attrs: ' maxlength="120" autocomplete="off"' }) +
       '<div class="campo"><label for="pMarca">Marca</label><div class="con-mas">' + lista('pMarca', opcionesMarcas(c, p.marca_id), p.marca_id || '') +
@@ -536,10 +654,16 @@
       '<div class="seccion-form">Imágenes</div>' +
       '<div class="campo todo"><label for="pImg">Imagen principal</label><div class="img-fila principal">' +
       '<span class="mini grande" id="pImgVista"></span>' +
-      '<input class="entrada" id="pImg" value="' + esc(p.imagen_principal_url || '') + '" placeholder="https://drive.google.com/file/d/…" spellcheck="false"></div>' +
-      '<span class="ayuda">Suba la foto a Google Drive → <b>Compartir</b> → <b>"Cualquier persona con el enlace"</b> → <b>Copiar enlace</b> → péguelo aquí.</span></div>' +
+      '<input class="entrada" id="pImg" value="' + esc(p.imagen_principal_url || '') + '" placeholder="IMAGENES/PRODUCTOS/CODIGO.png" spellcheck="false">' +
+      '<button type="button" class="btn btn-principal" id="pSubir">' + ico('upload') + '<span>Subir</span></button>' +
+      '<input type="file" id="pArchivo" accept="image/png,image/jpeg,image/webp" hidden></div>' +
+      '<span class="ayuda" id="pImgAyuda">Toque <b>Subir</b> para elegir la foto o tomarla con la cámara (necesita internet). Se guarda en Drive en ' +
+      '<b>APP-WEB › IMAGENES › PRODUCTOS</b> con el nombre del código (ej. <b>AMR104.png</b>) y aquí queda su ruta. ' +
+      'Si lo deja vacío se usa la imagen del Drive con su código o <b>no-img.jpg</b>.</span></div>' +
       '<div class="campo todo"><label>Más imágenes</label><div id="pExtras">' + extras.map(i => filaImagen(i.url, i.id)).join('') + '</div>' +
-      '<button type="button" class="btn btn-borde btn-chico" id="pMasImg" style="align-self:flex-start">' + icoX('imagen') + 'Agregar otra imagen</button></div>' +
+      '<div class="acciones-fila" style="justify-content:flex-start"><button type="button" class="btn btn-borde btn-chico" id="pSubirOtra">' + ico('upload') + 'Subir otra imagen</button>' +
+      '<button type="button" class="btn btn-borde btn-chico" id="pMasImg">' + icoX('imagen') + 'Escribir ruta o enlace</button></div>' +
+      '<input type="file" id="pArchivoOtra" accept="image/png,image/jpeg,image/webp" hidden></div>' +
       campo('pDesc', 'Descripción', p.descripcion, { clase: 'todo', area: true, ph: 'Medidas, material, uso…' }) +
 
       (!nuevo ? '<div class="seccion-form">Estado</div>' + campoLista('pEstado', 'Estado', [['ACTIVO', 'Activo'], ['INACTIVO', 'Inactivo']], p.estado || 'ACTIVO') : '') +
@@ -577,9 +701,42 @@
     vol();
     // Vista previa de imágenes
     const vistaPrincipal = () => {
-      const u = txt($('#pImg', f).value);
-      $('#pImgVista', f).innerHTML = u ? '<img src="' + esc(App.urlImagen(u)) + '" alt="" onerror="this.remove()">' : '';
+      const v = txt($('#pImg', f).value);
+      const u = v ? urlDe(v) : imagenDe(Object.assign({}, p, { codigo: $('#pCodigo', f).value, imagen_principal_url: '' }));
+      $('#pImgVista', f).innerHTML = u ? '<img src="' + esc(u) + '" alt="" onerror="this.remove()">' : '';
     };
+    // Subir fotos a Drive
+    const subir = async (input, boton, sufijo, alTerminar) => {
+      const archivo = input.files && input.files[0];
+      input.value = '';
+      if (!archivo) return;
+      const textoAntes = boton.innerHTML;
+      boton.disabled = true;
+      boton.innerHTML = 'Subiendo…';
+      try {
+        const ruta = await subirImagen(archivo, txt($('#pCodigo', f).value), sufijo());
+        alTerminar(ruta);
+        App.aviso('Imagen guardada en Drive: ' + ruta, 'ok');
+      } catch (e) {
+        mensaje(f, e.message || String(e));
+      } finally {
+        boton.disabled = false;
+        boton.innerHTML = textoAntes;
+      }
+    };
+    $('#pSubir', f).onclick = () => { mensaje(f, ''); $('#pArchivo', f).click(); };
+    $('#pArchivo', f).onchange = e => subir(e.target, $('#pSubir', f), () => '', ruta => { $('#pImg', f).value = ruta; vistaPrincipal(); });
+    $('#pSubirOtra', f).onclick = () => { mensaje(f, ''); $('#pArchivoOtra', f).click(); };
+    $('#pArchivoOtra', f).onchange = e => subir(e.target, $('#pSubirOtra', f), () => {
+      const usados = $$('#pExtras .img-fila input', f).map(i => txt(i.value).toLowerCase());
+      const base = nombreArchivo($('#pCodigo', f).value).toLowerCase() + '-';
+      let n = 2;
+      while (usados.some(u => u.indexOf('/' + base + n + '.') >= 0)) n++;
+      return String(n);
+    }, ruta => {
+      $('#pExtras', f).insertAdjacentHTML('beforeend', filaImagen(ruta, ''));
+    });
+    $('#pCodigo', f).addEventListener('change', vistaPrincipal);
     $('#pImg', f).oninput = vistaPrincipal;
     vistaPrincipal();
     const cajaExtras = $('#pExtras', f);
@@ -590,8 +747,8 @@
     cajaExtras.addEventListener('click', ev => { const b = ev.target.closest('[data-quitar]'); if (b) b.closest('.img-fila').remove(); });
     cajaExtras.addEventListener('input', ev => {
       const fila = ev.target.closest('.img-fila');
-      const u = txt(ev.target.value);
-      $('.mini', fila).innerHTML = u ? '<img src="' + esc(App.urlImagen(u)) + '" alt="" onerror="this.remove()">' : '';
+      const u = urlDe(ev.target.value);
+      $('.mini', fila).innerHTML = u ? '<img src="' + esc(u) + '" alt="" onerror="this.remove()">' : '';
     });
     // Crear marca / categoría sin salir del formulario
     $$('[data-nueva]', f).forEach(b => {
@@ -660,7 +817,8 @@
 
       // Imágenes
       const urls = [d.imagen_principal_url].concat($$('#pExtras .img-fila input', f).map(i => txt(i.value)));
-      if (urls.some(u => u && !/^https?:\/\//i.test(u))) return mensaje(f, 'Los enlaces de imagen deben empezar con https://');
+      const mala = urls.find(u => u && !esUrl(u) && !esRuta(u));
+      if (mala) return mensaje(f, 'La imagen «' + mala + '» no es válida. Use una ruta como IMAGENES/PRODUCTOS/AMR104.png o un enlace https://');
 
       const id = nuevo ? U.uuid() : p.id;
       if (!nuevo && $('#pEstado', f)) d.estado = $('#pEstado', f).value;
@@ -696,6 +854,117 @@
       console.error(err);
       return mensaje(f, err.message || String(err));
     }
+  }
+
+  // ---------- Unidades de medida (pestaña LISTAS, lista "UNIDAD") ----------
+  const UNIDADES_FERRETERIA = ['BOTE', 'COMBO', 'CTA', 'DOCENA', 'KILO', 'KIT', 'PAQUETE', 'PAR', 'ROLLO', 'SET', 'UNIDAD'];
+  const UNIDAD_EQUIVALE = { UND: 'UNIDAD', KG: 'KILO', ROL: 'ROLLO', JGO: 'SET' };   // unidades antiguas → nuevas
+
+  async function gestionarUnidades() {
+    const f = modalAncho({
+      titulo: 'Unidades de medida',
+      html: '<p class="nota">Son las unidades en que se cuenta el stock (UNIDAD, KILO, ROLLO…). Puede agregar, renombrar u ordenar. ' +
+        'El código no se cambia porque lo usan los productos; si ya no sirve, desactívela.</p>' +
+        '<div class="acciones-fila" style="justify-content:flex-start;margin-bottom:12px">' +
+        '<button class="btn btn-principal" data-acc="nueva">' + icoX('mas') + 'Nueva unidad</button>' +
+        '<button class="btn btn-borde" data-acc="ferreteria">Usar la lista de la ferretería</button></div>' +
+        '<div id="uLista"></div>',
+      botones: [{ t: 'Cerrar', clase: 'btn-principal' }]
+    });
+    const leer = async () => (await Datos.listar('LISTAS', l => l.lista === 'UNIDAD'))
+      .sort((a, b) => (a.estado === 'INACTIVO') - (b.estado === 'INACTIVO') || n0(a.orden) - n0(b.orden) || txt(a.codigo).localeCompare(txt(b.codigo)));
+    const pintar = async () => {
+      const c = await cargar();
+      const uso = new Map();
+      c.productos.forEach(p => uso.set(txt(p.unidad), (uso.get(txt(p.unidad)) || 0) + 1));
+      const lista = await leer();
+      $('#uLista', f).innerHTML = !lista.length ? '<p class="vacio">No hay unidades. Use "Usar la lista de la ferretería".</p>'
+        : '<div class="tabla-env"><table class="tabla compacta"><thead><tr><th>Código</th><th>Nombre</th><th class="num">Orden</th>' +
+          '<th class="num">Productos</th><th>Estado</th><th></th></tr></thead><tbody>' +
+          lista.map(u => '<tr' + (activo(u) ? '' : ' class="inactivo"') + '><td><b>' + esc(u.codigo) + '</b></td><td>' + esc(u.nombre) + '</td>' +
+            '<td class="num">' + esc(u.orden) + '</td><td class="num">' + (uso.get(txt(u.codigo)) || 0) + '</td>' +
+            '<td>' + etiquetaEstado(u.estado, 'Activa', 'Inactiva') + '</td>' +
+            '<td class="acc"><div class="acciones-fila"><button class="btn btn-chico btn-borde" data-acc="editar" data-cod="' + esc(u.codigo) + '">Editar</button>' +
+            '<button class="btn btn-chico ' + (activo(u) ? 'btn-peligro' : 'btn-borde') + '" data-acc="estado" data-cod="' + esc(u.codigo) + '">' +
+            (activo(u) ? 'Desactivar' : 'Activar') + '</button></div></td></tr>').join('') + '</tbody></table></div>';
+    };
+    f.addEventListener('click', async ev => {
+      const b = ev.target.closest('[data-acc]');
+      if (!b) return;
+      const lista = await leer();
+      const u = lista.find(x => x.codigo === b.dataset.cod);
+      if (b.dataset.acc === 'nueva' || b.dataset.acc === 'editar') { if (await editarUnidad(u, lista)) pintar(); }
+      else if (b.dataset.acc === 'estado') {
+        const c = await cargar();
+        const n = c.productos.filter(p => txt(p.unidad) === u.codigo).length;
+        if (activo(u) && n && !(await App.confirmar('Desactivar unidad', n + ' producto(s) usan ' + u.codigo +
+          '. Seguirán con esa unidad, pero ya no se podrá elegir para productos nuevos.', 'Desactivar', 'btn-peligro'))) return;
+        await Datos.guardar('LISTAS', { lista: 'UNIDAD', codigo: u.codigo, estado: activo(u) ? 'INACTIVO' : 'ACTIVO' });
+        pintar();
+      } else if (b.dataset.acc === 'ferreteria') {
+        if (await usarUnidadesFerreteria(lista)) pintar();
+      }
+    });
+    pintar();
+  }
+
+  function editarUnidad(u, lista) {
+    return new Promise(listo => {
+      const nueva = !u;
+      u = u || {};
+      const siguiente = lista.reduce((m, x) => Math.max(m, n0(x.orden)), 0) + 1;
+      const fm = App.modal({
+        titulo: nueva ? 'Nueva unidad de medida' : 'Editar unidad ' + u.codigo,
+        html: campo('uCod', 'Código', u.codigo, { req: true, ph: 'Ej. METRO', attrs: ' maxlength="12" autocapitalize="characters" spellcheck="false"' + (nueva ? '' : ' readonly'),
+            ayuda: nueva ? 'MAYÚSCULAS y números, sin espacios. No se cambia después.' : 'El código no se cambia.' }) +
+          campo('uNom', 'Nombre', u.nombre || '', { req: true, ph: 'Ej. METRO', attrs: ' maxlength="40"' }) +
+          campoNum('uOrden', 'Orden en la lista', nueva ? siguiente : u.orden, { ayuda: 'Número más bajo = aparece primero.' }) +
+          '<div class="f-msg"></div>',
+        botones: [{ t: 'Cancelar', accion: () => listo(false) }, { t: 'Guardar', clase: 'btn-principal', accion: async m => {
+          try {
+            const cod = txt($('#uCod', m).value).toUpperCase().replace(/\s+/g, '');
+            const nom = txt($('#uNom', m).value);
+            if (!/^[A-Z0-9_-]{1,12}$/.test(cod)) return mensaje(m, 'El código debe tener de 1 a 12 MAYÚSCULAS o números, sin espacios.');
+            if (!nom) return mensaje(m, 'Escriba el nombre.');
+            if (nueva && lista.some(x => x.codigo === cod)) return mensaje(m, 'La unidad ' + cod + ' ya existe (puede estar inactiva: actívela).');
+            const orden = leerNumero(m, 'uOrden', 'el orden', { dec: 0 });
+            await Datos.guardar('LISTAS', { lista: 'UNIDAD', codigo: cod, nombre: nom, orden: orden === '' ? siguiente : orden, estado: nueva ? 'ACTIVO' : (u.estado || 'ACTIVO') });
+            App.aviso('Unidad guardada', 'ok');
+            listo(true);
+          } catch (e) {
+            return mensaje(m, e.message || String(e));
+          }
+        } }]
+      });
+      const ic = $('#uCod', fm), inom = $('#uNom', fm);
+      if (nueva) ic.oninput = () => { ic.value = ic.value.toUpperCase().replace(/\s/g, ''); if (!inom.dataset.tocado) inom.value = ic.value; };
+      inom.oninput = () => { inom.dataset.tocado = '1'; };
+    });
+  }
+
+  /** Deja activas las unidades de la ferretería; pasa UND→UNIDAD, KG→KILO, ROL→ROLLO, JGO→SET en los productos. */
+  async function usarUnidadesFerreteria(lista) {
+    const c = await cargar();
+    const cambiar = c.productos.filter(p => UNIDAD_EQUIVALE[txt(p.unidad)]);
+    const usadas = new Set(c.productos.map(p => UNIDAD_EQUIVALE[txt(p.unidad)] || txt(p.unidad)));
+    const sobran = lista.filter(x => UNIDADES_FERRETERIA.indexOf(x.codigo) < 0 && activo(x));
+    const quedan = sobran.filter(x => usadas.has(x.codigo));
+    const ok = await App.confirmar('Usar la lista de la ferretería',
+      'Quedarán activas: ' + UNIDADES_FERRETERIA.join(', ') + '.' +
+      (cambiar.length ? ' Se cambia la unidad de ' + cambiar.length + ' producto(s): UND→UNIDAD, KG→KILO, ROL→ROLLO, JGO→SET.' : '') +
+      (sobran.length - quedan.length ? ' Se desactivan las que nadie usa (' + sobran.filter(x => !usadas.has(x.codigo)).map(x => x.codigo).join(', ') + ').' : '') +
+      (quedan.length ? ' Siguen activas porque hay productos que las usan: ' + quedan.map(x => x.codigo).join(', ') + '.' : ''), 'Aplicar');
+    if (!ok) return false;
+    const registros = UNIDADES_FERRETERIA.map((cod, i) => {
+      const ya = lista.find(x => x.codigo === cod);
+      return { tabla: 'LISTAS', fila: ya ? { lista: 'UNIDAD', codigo: cod, orden: i + 1, estado: 'ACTIVO' }
+        : { lista: 'UNIDAD', codigo: cod, nombre: cod, orden: i + 1, estado: 'ACTIVO' } };
+    });
+    sobran.filter(x => !usadas.has(x.codigo)).forEach(x => registros.push({ tabla: 'LISTAS', fila: { lista: 'UNIDAD', codigo: x.codigo, estado: 'INACTIVO' } }));
+    cambiar.forEach(p => registros.push({ tabla: 'PRODUCTOS', fila: { id: p.id, unidad: UNIDAD_EQUIVALE[txt(p.unidad)] } }));
+    await Datos.guardarVarios(registros);
+    App.aviso('Unidades actualizadas', 'ok');
+    return true;
   }
 
   // ---------- Categorías y marcas ----------
@@ -847,8 +1116,8 @@
         (veCostos() ? '<div class="tarjeta tile"><span>Valor del inventario (al costo)</span><b class="cifra chica">' + U.bs(valor) + '</b></div>' : '') +
         '</div>' +
         '<div class="filtros">' +
-        '<div class="campo"><label for="psBuscar">Buscar (nombre, código, código de barras o ubicación)</label>' +
-        '<input class="entrada" id="psBuscar" data-foco value="' + esc(fPS.buscar) + '" autocomplete="off" enterkeyhint="search" placeholder="Escriba o escanee"></div>' +
+        '<div class="campo"><label for="psBuscar">Buscar <small class="suave">(también ubicación · después de una coma: marca)</small></label>' +
+        '<input class="entrada" id="psBuscar" data-foco value="' + esc(fPS.buscar) + '" autocomplete="off" enterkeyhint="search" placeholder="Ej. clavo 2, truper"></div>' +
         '<div class="campo corto"><label for="psCat">Categoría</label>' +
         lista('psCat', [['', 'Todas']].concat(arbolCategorias(c).map(x => [x[0], x[1]])), fPS.categoria) + '</div>' +
         '<div class="campo corto"><label for="psVista">Mostrar</label>' + lista('psVista', VISTAS_PS, fPS.vista) + '</div></div>' +
@@ -866,7 +1135,7 @@
           return;
         }
         const ids = new Set();
-        const b = norm(fPS.buscar);
+        const b = fPS.buscar.indexOf(',') < 0 ? norm(fPS.buscar) : '';
         const porUbic = b ? new Set(items.filter(i => norm(i.ps.ubicacion).indexOf(b) >= 0).map(i => String(i.p.id))) : null;
         (await buscar(fPS.buscar, { inactivos: true, categorias: fPS.categoria ? descendientes(c, fPS.categoria) : null })).forEach(p => ids.add(String(p.id)));
         if (porUbic) porUbic.forEach(id => { if (!fPS.categoria || descendientes(c, fPS.categoria).has(String(c.porId.get(id).categoria_id))) ids.add(id); });
@@ -910,7 +1179,7 @@
       restaurarFoco(raiz);
 
       let espera = null;
-      iBuscar.oninput = () => { fPS.buscar = iBuscar.value; fPS.limite = 50; clearTimeout(espera); espera = setTimeout(pintar, 150); };
+      iBuscar.oninput = () => { fPS.buscar = iBuscar.value; fPS.limite = 50; clearTimeout(espera); espera = setTimeout(pintar, 60); };
       iBuscar.onkeydown = async ev => {
         if (ev.key !== 'Enter') return;
         ev.preventDefault();
@@ -1155,7 +1424,7 @@
       html: '<p class="nota">Marque los productos del catálogo general que se venden o guardan en esta sucursal. ' +
         'Puede escanear uno tras otro: cada código leído se marca solo.</p>' +
         '<div class="filtros"><div class="campo"><label for="aBuscar">Buscar o escanear</label>' +
-        '<input class="entrada" id="aBuscar" autocomplete="off" enterkeyhint="search" placeholder="Nombre, código o código de barras"></div>' +
+        '<input class="entrada" id="aBuscar" autocomplete="off" enterkeyhint="search" placeholder="Ej. martillo, stanley"></div>' +
         '<div class="campo corto"><label for="aCat">Categoría</label>' + lista('aCat', [['', 'Todas']].concat(arbolCategorias(c).map(x => [x[0], x[1]])), '') + '</div></div>' +
         '<div class="barra-sel"><button type="button" class="btn btn-chico btn-borde" id="aTodos">Marcar los de la lista</button>' +
         '<button type="button" class="btn btn-chico btn-borde" id="aNinguno">Quitar todas las marcas</button>' +
@@ -1193,7 +1462,7 @@
       contar();
     });
     let espera = null;
-    iB.oninput = () => { est.buscar = iB.value; clearTimeout(espera); espera = setTimeout(pintar, 150); };
+    iB.oninput = () => { est.buscar = iB.value; clearTimeout(espera); espera = setTimeout(pintar, 60); };
     iB.onkeydown = async ev => {
       if (ev.key !== 'Enter') return;
       ev.preventDefault();
@@ -1317,7 +1586,8 @@
         '<div class="titulo"><div><h1>Buscar producto y stock</h1><p>' + (suc ? 'Stock y precios de ' + esc(suc.nombre) + '.' : 'Sin sucursal elegida: solo datos del catálogo.') +
         ' Escriba, escanee con la cámara o use el lector USB.</p></div></div>' +
         '<div class="buscador"><input class="entrada grande" id="bQ" data-foco value="' + esc(fBus.q) + '" autocomplete="off" ' +
-        'enterkeyhint="search" placeholder="Nombre, código o código de barras"></div>' +
+        'enterkeyhint="search" placeholder="Código, código de barras o nombre · marca después de una coma"></div>' +
+        '<p class="nota" style="margin:-4px 0 10px">Ej.: <b>martillo 16</b> · <b>martillo, stanley</b> · <b>, truper</b> (todo de una marca) · o escanee el código. Atajo: tecla <b>F2</b> desde cualquier pantalla.</p>' +
         (suc ? '<label class="check chico" style="margin:-4px 0 14px"><input type="checkbox" id="bTodo"' + (fBus.todo ? ' checked' : '') + '>' +
           '<span>Incluir productos del catálogo que no están en esta sucursal</span></label>' : '') +
         '<div id="bRes"></div>';
@@ -1366,13 +1636,18 @@
       if (!focoPrevio && esPantallaFina() && !document.querySelector('.modal-fondo')) iQ.focus();
 
       let espera = null;
-      iQ.oninput = () => { fBus.q = iQ.value; fBus.limite = 30; clearTimeout(espera); espera = setTimeout(pintar, 150); };
+      iQ.oninput = () => { fBus.q = iQ.value; fBus.limite = 30; clearTimeout(espera); espera = setTimeout(pintar, 60); };
       iQ.onkeydown = async ev => {
         if (ev.key !== 'Enter') return;
         ev.preventDefault();
         const r = await porCodigo(iQ.value);
-        if (r) { iQ.select(); verProducto(r.producto, { presentacion: r.por === 'barras' ? r.presentacion : '' }); }
+        if (r) { iQ.select(); verProducto(r.producto, { presentacion: r.por === 'barras' ? r.presentacion : '' }); return; }
+        const unicos = $$('#bRes .prod-tarjeta', raiz);
+        if (unicos.length === 1) verProducto(c.porId.get(String(unicos[0].dataset.id)));
       };
+      iQ.addEventListener('keydown', ev => {
+        if (ev.key === 'Escape') { iQ.value = ''; fBus.q = ''; pintar(); }
+      });
       const chk = $('#bTodo', raiz);
       if (chk) chk.onchange = () => { fBus.todo = chk.checked; App.refrescarContexto(); };
       raiz.onclick = async ev => {
@@ -1400,7 +1675,8 @@
     const asig = activo(ps);
     const st = await stocks();
     const upc = n0(p.unidades_por_caja), upp = n0(p.unidades_por_paquete);
-    const imgs = [txt(p.imagen_principal_url)].concat((c.imagenes.get(String(p.id)) || []).map(i => txt(i.url))).filter(Boolean).map(App.urlImagen);
+    let imgs = [p.imagen_principal_url].concat((c.imagenes.get(String(p.id)) || []).map(i => i.url)).map(v => urlDe(v, c)).filter(Boolean);
+    if (!imgs.length && imagenDe(p, c)) imgs = [imagenDe(p, c)];
     const costo = asig ? n0(ps.costo_promedio) : 0;
     const vol = n0(p.caja_ancho_cm) * n0(p.caja_alto_cm) * n0(p.caja_prof_cm) / 1e6;
     const leida = op.presentacion ? '<div class="msg msg-ok">Código leído: <b>' + NOMBRE_PRES[op.presentacion] + '</b>' +
