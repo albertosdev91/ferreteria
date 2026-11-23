@@ -436,3 +436,8 @@ button.tile:hover { border-color: var(--naranja); }
 @media (max-width: 599px) { .tabla.calc th:nth-child(4), .tabla.calc td:nth-child(4) { display: none; } }
 .tabla.calc label.sub { display: flex; align-items: center; gap: 4px; white-space: nowrap; }
 .tabla.calc label.sub .mini-num { margin: 0; }
+
+/* Fase 5.3 — elegir empresa / sucursal, asignar a varias */
+.selector-suc { padding: 10px 12px; border: 1px solid var(--borde); border-radius: var(--radio); background: #fff; }
+.selector-suc .campo { flex: 1 1 220px; }
+.dest-empresa { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 6px 0; color: var(--azul); }
