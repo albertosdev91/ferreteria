@@ -522,7 +522,7 @@
         nActivos + ' producto(s) activo(s).</p></div>' +
         '<div class="acciones-fila"><button class="btn btn-borde" data-acc="categorias">' + icoX('etiqueta') + 'Categorías</button>' +
         '<button class="btn btn-borde" data-acc="marcas">' + icoX('etiqueta') + 'Marcas</button>' +
-        (esAG() ? '<button class="btn btn-borde" data-acc="unidades">' + icoX('etiqueta') + 'Unidades</button>' +
+        (editaCatalogo() ? '<button class="btn btn-borde" data-acc="unidades">' + icoX('etiqueta') + 'Unidades</button>' +
           '<button class="btn btn-borde" data-acc="usos">' + icoX('etiqueta') + 'Usos / profesiones</button>' : '') +
         '<button class="btn btn-borde" data-acc="exportar">' + ico('download') + 'Exportar Excel</button>' +
         '<button class="btn btn-principal" data-acc="nuevo">' + icoX('mas') + 'Nuevo producto</button></div></div>' +
@@ -616,8 +616,8 @@
           case 'exportar': return exportarCatalogo();
           case 'categorias': return gestionarMaestro('CATEGORIAS');
           case 'marcas': return gestionarMaestro('MARCAS');
-          case 'unidades': return esAG() ? gestionarLista(LISTA_CFG.UNIDAD) : null;
-          case 'usos': return esAG() ? gestionarLista(LISTA_CFG.USO) : null;
+          case 'unidades': return editaCatalogo() ? gestionarLista(LISTA_CFG.UNIDAD) : null;
+          case 'usos': return editaCatalogo() ? gestionarLista(LISTA_CFG.USO) : null;
           case 'mas': fCat.limite += 100; return pintar();
         }
       };
@@ -628,7 +628,7 @@
     const activar = p.estado === 'INACTIVO';
     const ok = await App.confirmar(activar ? 'Activar producto' : 'Desactivar producto', activar
       ? '«' + p.nombre + '» volverá a estar disponible en el catálogo.'
-      : '«' + p.nombre + '» ya no aparecerá para asignar ni vender. No se borra nada (stock e historial se conservan).' +
+      : '«' + p.nombre + '» ya no aparecerá para asignar ni vender' + (rol() === ADM ? ' en NINGUNA empresa ni sucursal' : '') + '. No se borra nada (stock e historial se conservan).' +
         (nSuc ? ' Está asignado a ' + nSuc + ' sucursal(es).' : ''),
       activar ? 'Activar' : 'Desactivar', activar ? 'btn-principal' : 'btn-peligro');
     if (!ok) return;
@@ -700,7 +700,8 @@
     const extras = nuevo ? [] : (c.imagenes.get(String(p.id)) || []);
     const alcanceNuevo = nuevo ? await alcanceSucursales() : { empresas: [], sucursales: [] };
 
-    const html = '<div class="form-2">' +
+    const html = (!nuevo && rol() === ADM ? '<div class="msg msg-aviso"><b>Atención:</b> este es el catálogo <b>general</b>. Lo que cambie aquí se aplica a este producto en <b>todas las empresas y sucursales</b> donde esté asignado.</div>' : '') +
+      '<div class="form-2">' +
       '<div class="seccion-form">Identificación</div>' +
       campo('pCodigo', 'Código interno', nuevo ? sugerirCodigo(c.productos) : p.codigo, { req: true,
         attrs: ' maxlength="30" autocapitalize="characters" spellcheck="false" autocomplete="off"',
@@ -964,6 +965,8 @@
         App.aviso('Sin cambios', 'info');
         return true;
       }
+      if (!nuevo && rol() === ADM && !(await App.confirmar('Cambiar un producto del catálogo general',
+        'Va a modificar «' + p.nombre + '». El cambio se aplica a este producto en TODAS las empresas y sucursales donde esté asignado. ¿Guardar?', 'Sí, guardar'))) return false;
       await Datos.guardarVarios(registros);
       App.aviso(nuevo ? 'Producto creado' + (asignar ? ' y asignado a ' + asignar + ' sucursal(es)' : '') : 'Producto guardado', 'ok');
       await App.refrescarContexto();
@@ -997,7 +1000,8 @@
   async function gestionarLista(cfg) {
     const f = modalAncho({
       titulo: cfg.titulo,
-      html: '<p class="nota">' + cfg.nota + '</p>' +
+      html: (rol() === ADM ? '<div class="msg msg-aviso"><b>Atención:</b> esta lista es la misma para <b>todas las empresas</b>. Si cambia un nombre o desactiva una opción, afecta a los productos de todas las empresas y sucursales.</div>' : '') +
+        '<p class="nota">' + cfg.nota + '</p>' +
         '<div class="acciones-fila" style="justify-content:flex-start;margin-bottom:12px">' +
         '<button class="btn btn-principal" data-acc="nueva">' + icoX('mas') + cfg.nueva + '</button>' +
         '<button class="btn btn-borde" data-acc="sugeridos">' + cfg.sugeridos + '</button></div>' +
@@ -1124,6 +1128,7 @@
         '<div class="campo"><label for="mBuscar">Buscar</label><input class="entrada" id="mBuscar" autocomplete="off"></div>' +
         '<div class="campo corto"><label for="mEstado">Mostrar</label>' + lista('mEstado', [['ACTIVO', 'Activas'], ['INACTIVO', 'Inactivas'], ['TODAS', 'Todas']], 'ACTIVO') + '</div>' +
         '<button class="btn btn-principal" data-acc="nueva">' + icoX('mas') + (esCat ? 'Nueva categoría' : 'Nueva marca') + '</button></div>' +
+        (rol() === ADM ? '<div class="msg msg-aviso"><b>Atención:</b> ' + (esCat ? 'las categorías' : 'las marcas') + ' son las mismas para <b>todas las empresas</b>: los cambios afectan a los productos de todas las empresas y sucursales.</div>' : '') +
         (esCat ? '<p class="nota">Puede crear subcategorías: al crear o editar, elija en qué categoría va "dentro".</p>' : '') +
         '<div id="mLista"></div>',
       botones: [{ t: 'Cerrar', clase: 'btn-principal' }]
