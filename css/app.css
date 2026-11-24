@@ -496,3 +496,7 @@ textarea.mono-suave { font-family: ui-monospace, "SF Mono", Consolas, monospace;
 .carac-tabla td { padding: 6px 0; border-bottom: 1px dashed var(--borde); }
 .carac-tabla tr:last-child th, .carac-tabla tr:last-child td { border-bottom: 0; }
 .carac-lista { margin: 8px 0 0; padding-left: 20px; font-size: 14px; line-height: 1.6; }
+
+/* Fase 5.6.1 — desbloquear unidades por paquete / caja */
+.check.aviso-check { border-color: #f0c36d; background: var(--amarillo-f); }
+.check.aviso-check:has(input:checked) { border-color: var(--amarillo); background: #ffe9b0; }
