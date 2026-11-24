@@ -1,0 +1,62 @@
+/* ============================================================
+   FASE 6 — proveedores, compras, cuentas por pagar, ajustes, importaciones
+   (archivo aparte: se carga después de app.css)
+   ============================================================ */
+a.tile { text-decoration: none; color: inherit; cursor: pointer; }
+a.tile:hover { border-color: var(--naranja); }
+.cifra.verde { color: var(--verde); }
+
+/* Líneas de compra / ajuste (tabla con campos) */
+.tabla.lineas td { vertical-align: middle; }
+.tabla.lineas td.prod { min-width: 220px; }
+.tabla.lineas .entrada { min-height: 38px; padding: 6px 8px; }
+.tabla.lineas select.entrada { min-width: 120px; }
+.entrada.num-in { width: 92px; text-align: right; }
+.tabla.lineas .con-sufijo { min-width: 0; justify-content: flex-end; }
+.tabla.lineas .btn-icono { color: var(--rojo); }
+.cant-pres { display: flex; gap: 6px; flex-wrap: wrap; }
+.cant-in { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; }
+.cant-in .entrada { width: 78px; }
+.cant-in small { font-size: 11.5px; color: var(--suave); white-space: nowrap; }
+
+/* Totales de compra / ajuste / importación */
+.totales { display: grid; gap: 6px 16px; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); margin-top: 12px;
+  padding: 12px 14px; border: 1px solid var(--borde); border-radius: 12px; background: #fafbfd; }
+.totales > div { display: flex; flex-direction: column; gap: 2px; }
+.totales span { font-size: 12.5px; color: var(--suave); }
+.totales b { font-size: 16px; color: var(--azul); }
+.totales .grande { grid-column: 1 / -1; padding-top: 8px; border-top: 1px dashed var(--borde); }
+.totales .grande b { font-size: 22px; }
+.totales .msg { grid-column: 1 / -1; margin: 4px 0 0; }
+
+/* Casillas en dos columnas (tipo de ajuste) */
+.checks.dos { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
+.sub-titulo { margin: 16px 0 8px; font-size: 14px; color: var(--azul); }
+.entrada.mini-num.ancho { width: 140px; }
+
+/* Botones "Ajustar stock" / "Compra" dentro de Productos de la sucursal → Editar */
+.ps-botones { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap; margin-top: 6px; }
+.ps-botones .btn { min-height: 30px; padding: 0 10px; font-size: 12.5px; }
+.ps-botones .ico { width: 16px; height: 16px; }
+
+/* Importaciones */
+.pasos { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 14px; }
+.pasos span { padding: 6px 12px; border-radius: 99px; background: #eef0f6; color: var(--suave); font-size: 13px; font-weight: 600; }
+.pasos span.actual { background: var(--naranja); color: var(--azul); }
+.pasos span.hecho { background: var(--verde-f); color: var(--verde); }
+.imp-tipos { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); margin-bottom: 14px; }
+.imp-tipo { display: flex; gap: 12px; align-items: flex-start; text-align: left; font: inherit; color: inherit; cursor: pointer; padding: 14px; }
+.imp-tipo:hover { border-color: var(--naranja); }
+.imp-tipo.elegida { border-color: var(--naranja); box-shadow: 0 0 0 2px rgba(254, 159, 49, .45); background: #fff8ee; }
+.imp-tipo .ico { width: 26px; height: 26px; color: var(--azul); margin-top: 2px; }
+.imp-tipo b { display: block; color: var(--azul); font-size: 14.5px; }
+.imp-tipo small { display: block; color: var(--suave); font-size: 12.5px; margin-top: 3px; line-height: 1.4; }
+.imp-tipo em { display: inline-block; margin-top: 6px; font-style: normal; font-size: 11.5px; font-weight: 700; padding: 2px 8px; border-radius: 99px; background: var(--amarillo-f); color: var(--amarillo); }
+.imp-paso .filtros { margin-bottom: 6px; }
+.imp-archivo { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.imp-archivo > span { flex: 1; min-width: 0; }
+.imp-archivo b { display: block; color: var(--azul); word-break: break-all; }
+.imp-archivo small { display: block; color: var(--suave); font-size: 12.5px; margin-top: 2px; }
+.imp-tabla td { vertical-align: top; }
+.imp-tabla tr.con-error td { background: #fff6f5; }
+.imp-det { display: block; margin-top: 2px; line-height: 1.45; }
