@@ -51,6 +51,9 @@
   const veCostos = () => rol() !== VEN;
   const editaPrecios = () => rol() === AG || rol() === ADM;
   const manejaSucursal = () => [AG, ADM, ALM].indexOf(rol()) >= 0;
+  const editaCatalogo = () => rol() === AG || rol() === ADM;      // AG: todo · ADMINISTRADOR: agrega y modifica lo de su empresa
+  /** ¿Puede modificar este producto / marca / categoría? AG siempre; ADMINISTRADOR solo si lo creó alguien de su empresa. */
+  const puedeModificar = (x, c) => esAG() || (rol() === ADM && !!x && !!c && c.misUsuarios.has(String(x.creado_por)));
   const porNombre = (a, b) => txt(a.nombre).localeCompare(txt(b.nombre), 'es');
   const precio = v => n0(v) > 0 ? U.bs(v) : '<span class="suave">—</span>';
   /** Usos / profesiones de un producto (columna "usos": códigos separados por coma). */
@@ -190,6 +193,8 @@
       Datos.listar('PRODUCTOS'), Datos.listar('MARCAS'), Datos.listar('CATEGORIAS'), Datos.listar('PRODUCTO_IMAGENES', activo),
       Datos.listar('ARCHIVOS', activo), Datos.listar('LISTAS', l => l.lista === 'USO')
     ]);
+    const miEmpresa = Sesion.actual ? String(Sesion.actual.empresa_id || '') : '';
+    const misUsuarios = new Set(miEmpresa ? (await Datos.listar('USUARIOS', u => mismo(u.empresa_id, miEmpresa))).map(u => String(u.id)) : []);
     usosLista.sort((a, b) => n0(a.orden) - n0(b.orden) || txt(a.nombre).localeCompare(txt(b.nombre), 'es'));
     const usoPorCod = new Map(usosLista.map(u => [String(u.codigo), u]));
     productos.sort((a, b) => (a.estado === 'INACTIVO') - (b.estado === 'INACTIVO') || porNombre(a, b));
@@ -231,6 +236,7 @@
       productos: productos, porId: porId, marcas: marcas, categorias: categorias, marcaPorId: marcaPorId, catPorId: catPorId,
       codigos: codigos, internos: internos, texto: texto, indice: indice, imagenes: imgs, rutas: rutas, rutaCategoria: rutaCategoria,
       nombreMarca: id => { const m = marcaPorId.get(String(id)); return m ? m.nombre : ''; },
+      misUsuarios: misUsuarios,
       usos: usosLista, nombreUso: cod => { const u = usoPorCod.get(String(cod)); return u ? u.nombre : cod; }
     };
     return cache;
@@ -314,6 +320,28 @@
     m.forEach((v, k) => m.set(k, redondear(v, 3)));
     return m;
   }
+
+  // ---------- "Nuevo stock": último ingreso de mercadería (compra, inventario inicial o traspaso recibido) ----------
+  const TIPOS_INGRESO = ['COMPRA', 'INVENTARIO_INICIAL', 'TRASPASO_ENTRADA'];
+  /** Map producto_id → fecha del último ingreso en la sucursal (servidor + lo de este equipo aún no enviado). */
+  async function ingresos(sucursalId) {
+    const m = new Map();
+    const poner = (k, fe) => { if (fe && (!m.get(k) || Date.parse(fe) > Date.parse(m.get(k)))) m.set(k, fe); };
+    (await Datos.listar('STOCK_ACTUAL', x => mismo(x.sucursal_id, sucursalId))).forEach(x => poner(String(x.producto_id), txt(x.ultimo_ingreso_en)));
+    (await Sesion.local.salida()).forEach(x => {
+      const f = x.fila;
+      if (x.tabla === 'MOVIMIENTOS' && mismo(f.sucursal_id, sucursalId) && Number(f.cantidad) > 0 && TIPOS_INGRESO.indexOf(f.tipo) >= 0) {
+        poner(String(f.producto_id), txt(f.fecha || f.creado_en));
+      }
+    });
+    return m;
+  }
+  async function diasNuevoStock() {
+    const n = parseInt(await Datos.config('dias_nuevo_stock', '7'), 10);
+    return isFinite(n) && n >= 0 ? n : 7;
+  }
+  const esNuevo = (fecha, dias) => !!fecha && dias > 0 && Date.now() - Date.parse(fecha) <= dias * 86400000;
+  const ETQ_NUEVO = ' <span class="etiqueta nuevo">Nuevo stock</span>';
 
   function textoStock(u, p) {
     u = Number(u) || 0;
@@ -462,8 +490,11 @@
     else App.ir('buscar');
   });
 
+  // El ADMINISTRADOR también entra al Catálogo general (agrega productos y modifica los de su empresa)
+  (function () { const it = App.itemMenu('catalogo'); if (it && it.roles.indexOf(ADM) < 0) it.roles.push(ADM); })();
+
   window.Catalogo = {
-    cargar: cargar, porCodigo: porCodigo, buscar: buscar, stocks: stocks, factor: factor, textoStock: textoStock,
+    cargar: cargar, porCodigo: porCodigo, buscar: buscar, stocks: stocks, ingresos: ingresos, diasNuevoStock: diasNuevoStock, factor: factor, textoStock: textoStock,
     imagen: imagenDe, urlImagen: urlDe, partirConsulta: partirConsulta, normalizar: norm, codigoClave: codigoClave
   };
 
@@ -471,13 +502,14 @@
   //  PANTALLA: CATÁLOGO GENERAL (solo ADMIN_GENERAL)
   // ============================================================
   const fCat = { buscar: '', categoria: '', marca: '', uso: '', estado: 'ACTIVO', limite: 50 };
+  let ultimaVistaCat = [];      // lo que se ve en el catálogo (para exportar)
 
   App.pantalla('catalogo', {
     refrescar: true,
     async render(el) {
       const raiz = contenedor(el);
-      if (!esAG()) {
-        raiz.innerHTML = vacio('lock', 'Solo el administrador general edita el catálogo general.');
+      if (!editaCatalogo()) {
+        raiz.innerHTML = vacio('lock', 'Su rol no tiene acceso al catálogo general.');
         return;
       }
       const c = await cargar();
@@ -488,11 +520,12 @@
 
       raiz.innerHTML =
         '<div class="titulo"><div><h1>Catálogo general</h1><p>Lista única de productos para todas las empresas. ' +
-        nActivos + ' producto(s) activo(s).</p></div>' +
+        nActivos + ' producto(s) activo(s).' + (esAG() ? '' : ' Puede agregar productos y modificar los que creó su empresa; los demás son de solo lectura.') + '</p></div>' +
         '<div class="acciones-fila"><button class="btn btn-borde" data-acc="categorias">' + icoX('etiqueta') + 'Categorías</button>' +
         '<button class="btn btn-borde" data-acc="marcas">' + icoX('etiqueta') + 'Marcas</button>' +
-        '<button class="btn btn-borde" data-acc="unidades">' + icoX('etiqueta') + 'Unidades</button>' +
-        '<button class="btn btn-borde" data-acc="usos">' + icoX('etiqueta') + 'Usos / profesiones</button>' +
+        (esAG() ? '<button class="btn btn-borde" data-acc="unidades">' + icoX('etiqueta') + 'Unidades</button>' +
+          '<button class="btn btn-borde" data-acc="usos">' + icoX('etiqueta') + 'Usos / profesiones</button>' : '') +
+        '<button class="btn btn-borde" data-acc="exportar">' + ico('download') + 'Exportar Excel</button>' +
         '<button class="btn btn-principal" data-acc="nuevo">' + icoX('mas') + 'Nuevo producto</button></div></div>' +
         '<div class="filtros">' +
         '<div class="campo"><label for="catBuscar">Buscar <small class="suave">(después de una coma: marca)</small></label>' +
@@ -513,6 +546,7 @@
           categorias: fCat.categoria ? descendientes(c, fCat.categoria) : null, uso: fCat.uso,
           marca: ''
         })).filter(p => fCat.estado === 'TODOS' || (fCat.estado === 'INACTIVO') === (p.estado === 'INACTIVO'));
+        ultimaVistaCat = vista;
         const cont = $('#catLista', raiz);
         if (!c.productos.length) {
           cont.innerHTML = vacio('book', '<b>El catálogo está vacío.</b><br>Cree el primer producto. (En la Fase 6 podrá importarlos desde Excel.)',
@@ -534,7 +568,8 @@
             const emp = [n0(p.unidades_por_paquete) ? 'Paq. ' + fmt(p.unidades_por_paquete) : '', n0(p.unidades_por_caja) ? 'Caja ' + fmt(p.unidades_por_caja) : '']
               .filter(Boolean).join(' · ');
             const barras = PRESENTACIONES.map(([col]) => txt(p[col])).filter(Boolean).join(' · ');
-            return '<tr class="clic' + (inactivo ? ' inactivo' : '') + '" data-acc="editar" data-id="' + esc(p.id) + '">' +
+            const mod = puedeModificar(p, c);
+            return '<tr class="clic' + (inactivo ? ' inactivo' : '') + '" data-acc="' + (mod ? 'editar' : 'ver') + '" data-id="' + esc(p.id) + '">' +
               '<td style="width:52px">' + miniatura(p, c) + '</td>' +
               '<td><b>' + esc(p.codigo) + '</b></td>' +
               '<td><b>' + esc(p.nombre) + '</b>' + etiquetaEnvio(pend[p.id]) +
@@ -544,9 +579,11 @@
               '<td>' + esc(p.unidad || '—') + '</td><td>' + esc(emp || '—') + '</td>' +
               '<td class="num">' + (nSuc.get(String(p.id)) || 0) + '</td>' +
               '<td>' + etiquetaEstado(p.estado) + '</td>' +
-              '<td class="acc"><div class="acciones-fila"><button class="btn btn-chico btn-borde" data-acc="editar" data-id="' + esc(p.id) + '">Editar</button>' +
-              '<button class="btn btn-chico ' + (inactivo ? 'btn-borde' : 'btn-peligro') + '" data-acc="estado" data-id="' + esc(p.id) + '">' +
-              (inactivo ? 'Activar' : 'Desactivar') + '</button></div></td></tr>';
+              '<td class="acc"><div class="acciones-fila">' + (mod
+                ? '<button class="btn btn-chico btn-borde" data-acc="editar" data-id="' + esc(p.id) + '">Editar</button>' +
+                  '<button class="btn btn-chico ' + (inactivo ? 'btn-borde' : 'btn-peligro') + '" data-acc="estado" data-id="' + esc(p.id) + '">' +
+                  (inactivo ? 'Activar' : 'Desactivar') + '</button>'
+                : '<button class="btn btn-chico btn-borde" data-acc="ver" data-id="' + esc(p.id) + '">Ver</button>') + '</div></td></tr>';
           }).join('') + '</tbody></table></div>' +
           (vista.length > mostrar.length ? '<div class="mas-centro"><button class="btn btn-borde" data-acc="mas">Mostrar más (' +
             (vista.length - mostrar.length) + ' restantes)</button></div>' : '<p class="nota" style="margin-top:10px">' + vista.length + ' producto(s).</p>');
@@ -560,7 +597,7 @@
         if (ev.key !== 'Enter') return;
         ev.preventDefault();
         const r = await porCodigo(iBuscar.value);
-        if (r) { fCat.buscar = ''; iBuscar.value = ''; await pintar(); formProducto(r.producto); }
+        if (r) { fCat.buscar = ''; iBuscar.value = ''; await pintar(); return puedeModificar(r.producto, c) ? formProducto(r.producto) : verProducto(r.producto); }
       };
       $('#catCat', raiz).onchange = e => { fCat.categoria = e.target.value; fCat.limite = 50; pintar(); };
       $('#catUso', raiz).onchange = e => { fCat.uso = e.target.value; fCat.limite = 50; pintar(); };
@@ -574,12 +611,14 @@
         switch (b.dataset.acc) {
           case 'nuevo': return formProducto(null);
           case 'crearCon': return formProducto(null, { codigoBarras: b.dataset.cod });
-          case 'editar': return formProducto(p);
-          case 'estado': return cambiarEstadoProducto(p, nSuc.get(String(p.id)) || 0);
+          case 'editar': return puedeModificar(p, c) ? formProducto(p) : verProducto(p);
+          case 'ver': return verProducto(p);
+          case 'estado': return puedeModificar(p, c) ? cambiarEstadoProducto(p, nSuc.get(String(p.id)) || 0) : null;
+          case 'exportar': return exportarCatalogo();
           case 'categorias': return gestionarMaestro('CATEGORIAS');
           case 'marcas': return gestionarMaestro('MARCAS');
-          case 'unidades': return gestionarLista(LISTA_CFG.UNIDAD);
-          case 'usos': return gestionarLista(LISTA_CFG.USO);
+          case 'unidades': return esAG() ? gestionarLista(LISTA_CFG.UNIDAD) : null;
+          case 'usos': return esAG() ? gestionarLista(LISTA_CFG.USO) : null;
           case 'mas': fCat.limite += 100; return pintar();
         }
       };
@@ -618,6 +657,19 @@
   }
   function opcionesCategorias(c, sel) {
     return [['', '— Sin categoría —']].concat(arbolCategorias(c, { incluir: sel }).map(x => [x[0], x[1]]));
+  }
+
+  /** "Potencia: 2000 W" → fila de tabla; "Incluye estuche" → punto de lista. */
+  function caracteristicasHtml(texto) {
+    const filas = [], puntos = [];
+    String(texto || '').split(/\r?\n/).map(l => l.trim()).filter(Boolean).forEach(l => {
+      const i = l.indexOf(':');
+      if (i > 0 && i <= 40 && l.slice(i + 1).trim()) filas.push([l.slice(0, i).trim(), l.slice(i + 1).trim()]);
+      else puntos.push(l.replace(/^[-•*·]\s*/, ''));
+    });
+    if (!filas.length && !puntos.length) return '';
+    return (filas.length ? '<table class="carac-tabla"><tbody>' + filas.map(f => '<tr><th>' + esc(f[0]) + '</th><td>' + esc(f[1]) + '</td></tr>').join('') + '</tbody></table>' : '') +
+      (puntos.length ? '<ul class="carac-lista">' + puntos.map(x => '<li>' + esc(x) + '</li>').join('') + '</ul>' : '');
   }
 
   function checksUsos(c, marcados) {
@@ -692,7 +744,15 @@
       '<div class="acciones-fila" style="justify-content:flex-start"><button type="button" class="btn btn-borde btn-chico" id="pSubirOtra">' + ico('upload') + 'Subir otra imagen</button>' +
       '<button type="button" class="btn btn-borde btn-chico" id="pMasImg">' + icoX('imagen') + 'Escribir ruta o enlace</button></div>' +
       '<input type="file" id="pArchivoOtra" accept="image/png,image/jpeg,image/webp" hidden></div>' +
-      campo('pDesc', 'Descripción', p.descripcion, { clase: 'todo', area: true, ph: 'Medidas, material, uso…' }) +
+      campo('pDesc', 'Descripción', p.descripcion, { clase: 'todo', area: true, ph: 'Para qué sirve, en pocas palabras.' }) +
+      '<div class="seccion-form">Características</div>' +
+      '<div class="campo todo"><label for="pCarac">Características técnicas</label>' +
+      '<textarea class="entrada mono-suave" id="pCarac" rows="6" maxlength="5000" placeholder="Potencia: 2000 W&#10;Voltaje: 220 V&#10;Peso: 0,8 kg&#10;Incluye 2 boquillas y estuche">' + esc(p.caracteristicas || '') + '</textarea>' +
+      '<span class="ayuda">Una por línea. Escriba <b>Nombre: valor</b> para que se vea como tabla (ej. <i>Potencia: 2000 W</i>). ' +
+      'Las líneas sin dos puntos se muestran como lista (ej. <i>Incluye 2 boquillas</i>).</span>' +
+      '<div class="carac-vista" id="pCaracVista"></div></div>' +
+      campo('pFicha', 'Enlace de la ficha técnica (datasheet)', p.ficha_tecnica_url, { clase: 'todo', ph: 'https://…/ficha.pdf', attrs: ' spellcheck="false"',
+        ayuda: 'Opcional. Enlace al PDF del fabricante o a un archivo de Google Drive compartido.' }) +
 
       (!nuevo ? '<div class="seccion-form">Estado</div>' + campoLista('pEstado', 'Estado', [['ACTIVO', 'Activo'], ['INACTIVO', 'Inactivo']], p.estado || 'ACTIVO') : '') +
       (nuevo && alcanceNuevo.sucursales.length ? '<div class="seccion-form">Asignar a sucursales</div>' +
@@ -779,6 +839,10 @@
       const u = urlDe(ev.target.value);
       $('.mini', fila).innerHTML = u ? '<img src="' + esc(u) + '" alt="" onerror="this.remove()">' : '';
     });
+    // Vista previa de las características
+    const vistaCarac = () => { $('#pCaracVista', f).innerHTML = caracteristicasHtml($('#pCarac', f).value); };
+    $('#pCarac', f).oninput = vistaCarac;
+    vistaCarac();
     // Crear un uso / profesión sin salir del formulario
     $('#pUsos', f).addEventListener('click', async ev => {
       if (!ev.target.closest('[data-nuevo-uso]')) return;
@@ -815,6 +879,7 @@
         codigo_barras_unidad: codigoLimpio(v('pBarUni')), codigo_barras_paquete: codigoLimpio(v('pBarPaq')),
         codigo_barras_caja: codigoLimpio(v('pBarCaja')),
         descripcion: v('pDesc'), imagen_principal_url: v('pImg'),
+        caracteristicas: String($('#pCarac', f).value || '').replace(/\s+$/, ''), ficha_tecnica_url: v('pFicha'),
         usos: $$('#pUsos input[name="pUso"]:checked', f).map(i => i.value).join(',')
       };
       if (!d.codigo) return mensaje(f, 'Escriba el código interno del producto.');
@@ -857,6 +922,7 @@
 
       // Imágenes
       const urls = [d.imagen_principal_url].concat($$('#pExtras .img-fila input', f).map(i => txt(i.value)));
+      if (d.ficha_tecnica_url && !esUrl(d.ficha_tecnica_url)) return mensaje(f, 'El enlace de la ficha técnica debe empezar con https://');
       const mala = urls.find(u => u && !esUrl(u) && !esRuta(u));
       if (mala) return mensaje(f, 'La imagen «' + mala + '» no es válida. Use una ruta como IMAGENES/PRODUCTOS/AMR104.png o un enlace https://');
 
@@ -1070,9 +1136,10 @@
           filas.map(x => '<tr' + (activo(x) ? '' : ' class="inactivo"') + '><td><b>' + esc(x.nombre) + '</b></td>' +
             (esCat ? '<td>' + esc(c.rutaCategoria(x.id)) + '</td>' : '') +
             '<td class="num">' + (uso.get(String(x.id)) || 0) + '</td><td>' + etiquetaEstado(x.estado, 'Activa', 'Inactiva') + '</td>' +
-            '<td class="acc"><div class="acciones-fila"><button class="btn btn-chico btn-borde" data-acc="editar" data-id="' + esc(x.id) + '">Editar</button>' +
+            '<td class="acc">' + (puedeModificar(x, c) ? '<div class="acciones-fila"><button class="btn btn-chico btn-borde" data-acc="editar" data-id="' + esc(x.id) + '">Editar</button>' +
             '<button class="btn btn-chico ' + (activo(x) ? 'btn-peligro' : 'btn-borde') + '" data-acc="estado" data-id="' + esc(x.id) + '">' +
-            (activo(x) ? 'Desactivar' : 'Activar') + '</button></div></td></tr>').join('') + '</tbody></table></div>';
+            (activo(x) ? 'Desactivar' : 'Activar') + '</button></div>' : '<span class="suave" title="La creó el administrador general u otra empresa">Solo lectura</span>') +
+            '</td></tr>').join('') + '</tbody></table></div>';
     };
     $('#mBuscar', f).oninput = e => { est.buscar = e.target.value; pintar(); };
     $('#mEstado', f).onchange = e => { est.estado = e.target.value; pintar(); };
@@ -1135,7 +1202,8 @@
   //  PANTALLA: PRODUCTOS DE LA SUCURSAL
   // ============================================================
   const fPS = { buscar: '', categoria: '', uso: '', vista: 'TODOS', limite: 50 };
-  const VISTAS_PS = [['TODOS', 'Todos los asignados'], ['BAJO', 'Stock bajo'], ['CERO', 'Sin stock'], ['ESPECIAL', 'Productos especiales'],
+  let ultimaVistaPS = { sucId: '', items: [] };   // lo que se ve (para exportar)
+  const VISTAS_PS = [['TODOS', 'Todos los asignados'], ['NUEVO', 'Nuevo stock'], ['BAJO', 'Stock bajo'], ['CERO', 'Sin stock'], ['ESPECIAL', 'Productos especiales'],
     ['SIN_PRECIO', 'Sin precio'], ['SIN_UBICACION', 'Sin ubicación'], ['INACTIVO', 'Desasignados']];
 
   /** Productos de una sucursal con su stock y avisos. */
@@ -1143,12 +1211,15 @@
     const c = await cargar();
     const filas = await Datos.listar('PRODUCTOS_SUCURSAL', x => mismo(x.sucursal_id, sucursalId));
     const stock = await stocks(sucursalId);
+    const ing = await ingresos(sucursalId);
+    const dias = await diasNuevoStock();
     return filas.map(ps => {
       const p = c.porId.get(String(ps.producto_id));
       if (!p) return null;
       const s = stock.get(String(ps.producto_id)) || 0;
       const min = n0(ps.stock_minimo);
-      return { ps: ps, p: p, stock: s, activo: activo(ps), bajo: min > 0 && s <= min, cero: s <= 0,
+      const ingreso = ing.get(String(ps.producto_id)) || '';
+      return { ps: ps, p: p, stock: s, activo: activo(ps), bajo: min > 0 && s <= min, cero: s <= 0, ingreso: ingreso, nuevo: esNuevo(ingreso, dias),
         especial: ps.producto_especial === 'SI', sinPrecio: !(n0(ps.precio_unidad) > 0), sinUbicacion: !txt(ps.ubicacion) };
     }).filter(Boolean);
   }
@@ -1199,7 +1270,8 @@
       const act = items.filter(i => i.activo);
       const pend = await pendientesDe('PRODUCTOS_SUCURSAL');
       const valor = act.reduce((t, i) => t + Math.max(i.stock, 0) * n0(i.ps.costo_promedio), 0);
-      const cuenta = { BAJO: act.filter(i => i.bajo).length, CERO: act.filter(i => i.cero).length, ESPECIAL: act.filter(i => i.especial).length };
+      const diasNuevo = await diasNuevoStock();
+      const cuenta = { NUEVO: act.filter(i => i.nuevo).length, BAJO: act.filter(i => i.bajo).length, CERO: act.filter(i => i.cero).length, ESPECIAL: act.filter(i => i.especial).length };
 
       const tile = (vista, titulo, cifra, clase) => '<button class="tarjeta tile' + (fPS.vista === vista ? ' elegida' : '') + '" data-vista="' + vista + '">' +
         '<span>' + titulo + '</span><b class="cifra' + (clase ? ' ' + clase : '') + '">' + cifra + '</b></button>';
@@ -1210,16 +1282,20 @@
         '<div class="acciones-fila">' +
         (esAG() && alcance.sucursales.length > 1 ? '<button class="btn btn-borde" data-acc="copiar">' + icoX('copiar') + 'Copiar de otra sucursal</button>' : '') +
         (editaPrecios() ? '<button class="btn btn-borde" data-acc="imprimir">' + ico('file') + 'Imprimir lista</button>' : '') +
+        '<button class="btn btn-borde" data-acc="exportar">' + ico('download') + 'Exportar Excel</button>' +
         '<button class="btn btn-principal" data-acc="asignar">' + icoX('mas') + 'Asignar productos</button></div></div>' +
         (selectores ? '<div class="filtros selector-suc">' + selectores + '</div>' : '') +
         (!editaPrecios() ? '<div class="msg msg-info">Su rol puede ver costos y precios, pero no cambiar los precios.</div>' : '') +
         '<div class="tiles">' +
         tile('TODOS', 'Asignados', act.length) +
+        tile('NUEVO', 'Nuevo stock', cuenta.NUEVO, cuenta.NUEVO ? 'verde' : '') +
         tile('BAJO', 'Stock bajo', cuenta.BAJO, cuenta.BAJO ? 'amarilla' : '') +
         tile('CERO', 'Sin stock', cuenta.CERO, cuenta.CERO ? 'roja' : '') +
         tile('ESPECIAL', 'Especiales', cuenta.ESPECIAL) +
         (veCostos() ? '<div class="tarjeta tile"><span>Valor del inventario (al costo)</span><b class="cifra chica">' + U.bs(valor) + '</b></div>' : '') +
         '</div>' +
+        '<p class="nota">"Nuevo stock" se muestra ' + (diasNuevo ? diasNuevo + ' día(s)' : '(desactivado)') + ' después de cada ingreso de mercadería (compra, inventario inicial o traspaso recibido).' +
+        (esAG() ? ' <a href="#" data-acc="dias">Cambiar días</a>' : '') + '</p>' +
         '<div class="filtros">' +
         '<div class="campo"><label for="psBuscar">Buscar <small class="suave">(también ubicación · después de una coma: marca)</small></label>' +
         '<input class="entrada" id="psBuscar" data-foco value="' + esc(fPS.buscar) + '" autocomplete="off" enterkeyhint="search" placeholder="Ej. clavo 2, truper"></div>' +
@@ -1250,9 +1326,11 @@
         });
         const filtro = {
           TODOS: i => i.activo, BAJO: i => i.activo && i.bajo, CERO: i => i.activo && i.cero, ESPECIAL: i => i.activo && i.especial,
-          SIN_PRECIO: i => i.activo && i.sinPrecio, SIN_UBICACION: i => i.activo && i.sinUbicacion, INACTIVO: i => !i.activo
+          NUEVO: i => i.activo && i.nuevo, SIN_PRECIO: i => i.activo && i.sinPrecio, SIN_UBICACION: i => i.activo && i.sinUbicacion, INACTIVO: i => !i.activo
         }[fPS.vista] || (i => i.activo);
-        const vista = items.filter(i => ids.has(String(i.p.id)) && filtro(i)).sort((x, y) => porNombre(x.p, y.p));
+        const vista = items.filter(i => ids.has(String(i.p.id)) && filtro(i))
+          .sort(fPS.vista === 'NUEVO' ? (x, y) => Date.parse(y.ingreso) - Date.parse(x.ingreso) : (x, y) => porNombre(x.p, y.p));
+        ultimaVistaPS = { sucId: suc.id, items: vista };
         if (!vista.length) {
           cont.innerHTML = vacio('search', 'Ningún producto coincide.');
           return;
@@ -1266,6 +1344,7 @@
             const etq = (i.activo ? '' : ' <span class="etiqueta roja">Desasignado</span>') +
               (!activo(p) ? ' <span class="etiqueta roja">Inactivo en catálogo</span>' : '') +
               (i.activo && i.cero ? ' <span class="etiqueta roja">Sin stock</span>' : i.activo && i.bajo ? ' <span class="etiqueta amarilla">Stock bajo</span>' : '') +
+              (i.activo && i.nuevo ? ETQ_NUEVO : '') +
               (i.especial ? ' <span class="etiqueta naranja">Especial</span>' : '') +
               (i.activo && i.sinPrecio ? ' <span class="etiqueta">Sin precio</span>' : '') + etiquetaEnvio(pend[ps.id]);
             return '<tr class="clic' + (i.activo ? '' : ' inactivo') + '" data-acc="editar" data-id="' + esc(ps.id) + '">' +
@@ -1315,6 +1394,8 @@
           case 'asignar': return asignarProductos(suc, alcance);
           case 'copiar': return esAG() ? copiarDeSucursal(suc, alcance) : null;
           case 'imprimir': return editaPrecios() ? imprimirLista(suc) : null;
+          case 'exportar': return exportarSucursal(suc, alcance);
+          case 'dias': ev.preventDefault(); return esAG() ? cambiarDiasNuevo() : null;
           case 'mas': fPS.limite += 100; return pintar();
           case 'editar': {
             const i = items.find(x => mismo(x.ps.id, b.dataset.id));
@@ -1667,7 +1748,7 @@
     const disponibles = new Set(c.productos.filter(p => activo(p) && !activo(porProd.get(String(p.id)))).map(p => String(p.id)));
     if (!c.productos.some(activo)) {
       App.modal({ titulo: 'Catálogo vacío', html: '<p style="margin:0;line-height:1.5">El catálogo general todavía no tiene productos. ' +
-        (esAG() ? 'Créelos en <a href="#/catalogo">Catálogo general</a>.' : 'El administrador general debe cargarlos primero.') + '</p>' });
+        (editaCatalogo() ? 'Créelos en <a href="#/catalogo">Catálogo general</a>.' : 'Un administrador debe cargarlos primero.') + '</p>' });
       return;
     }
     if (!disponibles.size) { App.aviso('Todos los productos activos del catálogo ya están asignados a esta sucursal.', 'info', 6); return; }
@@ -1887,6 +1968,171 @@
         return mensaje(m, err.message || String(err));
       }
     }
+  }
+
+  /** Cuántos días se muestra "Nuevo stock" (CONFIG dias_nuevo_stock; solo administrador general). */
+  async function cambiarDiasNuevo() {
+    const actual = await diasNuevoStock();
+    App.modal({
+      titulo: 'Aviso "Nuevo stock"',
+      html: '<p class="nota">Después de cada ingreso de mercadería (compra, inventario inicial o traspaso recibido) el producto muestra ' +
+        '<span class="etiqueta nuevo">Nuevo stock</span> durante estos días, en todas las empresas y sucursales. Ajustes y ediciones no cuentan.</p>' +
+        campoNum('kDias', 'Días', actual, { ayuda: '0 = no mostrar el aviso.' }) + '<div class="f-msg"></div>',
+      botones: [{ t: 'Cancelar' }, { t: 'Guardar', clase: 'btn-principal', accion: async m => {
+        const v = txt($('#kDias', m).value);
+        if (!/^\d{1,3}$/.test(v)) return mensaje(m, 'Escriba un número entero de días (0 a 999).');
+        await Datos.guardar('CONFIG', { clave: 'dias_nuevo_stock', valor: String(Number(v)), descripcion: 'Días que un producto muestra "Nuevo stock" después de un ingreso' });
+        App.aviso('Guardado: ' + Number(v) + ' día(s)', 'ok');
+        await App.refrescarContexto();
+      } }]
+    });
+  }
+
+  // ---------- Exportar a Excel ----------
+  const fechaHoy = () => new Date().toLocaleDateString('es-BO', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  const fechaArchivo = () => U.ahoraISO().slice(0, 10);
+  const numX = v => { const n = num(v); return n === null ? '' : n; };
+  const fechaX = iso => { if (!iso) return ''; const d = new Date(iso); return isNaN(d) ? '' : d.toLocaleDateString('es-BO', { day: '2-digit', month: '2-digit', year: 'numeric' }); };
+
+  async function exportarCatalogo() {
+    const c = await cargar();
+    const vista = ultimaVistaCat.slice();
+    App.modal({
+      titulo: 'Exportar catálogo general a Excel',
+      html: '<div class="checks" style="grid-template-columns:1fr">' +
+        '<label class="check"><input type="radio" name="xAlc" value="VISTA" checked><span><b>Lo que estoy viendo (' + vista.length + ')</b><small>Con la búsqueda y los filtros actuales</small></span></label>' +
+        '<label class="check"><input type="radio" name="xAlc" value="TODO"><span><b>Todo el catálogo (' + c.productos.length + ')</b><small>Activos e inactivos</small></span></label>' +
+        '</div><p class="nota" style="margin-top:10px">Las columnas son las mismas que usará la plantilla de importación (Fase 6): puede corregir en Excel y volver a importar.</p>',
+      botones: [{ t: 'Cancelar' }, { t: 'Descargar Excel', clase: 'btn-principal', accion: m => {
+        const todo = $('input[name="xAlc"]:checked', m).value === 'TODO';
+        const lista2 = (todo ? c.productos : vista).slice().sort(porNombre);
+        Excel.descargar('Catalogo_general_' + fechaArchivo() + '.xlsx', [{
+          nombre: 'Catálogo', titulo: 'Catálogo general de productos', subtitulo: fechaHoy() + ' · ' + lista2.length + ' producto(s)' + (todo ? '' : ' (filtrados)'),
+          columnas: [{ t: 'Código', w: 12 }, { t: 'Nombre', w: 42 }, { t: 'Marca', w: 16 }, { t: 'Categoría', w: 28 }, { t: 'Usos / profesiones', w: 28 },
+            { t: 'Unidad', w: 10 }, { t: 'Unid. por paquete', w: 10, tipo: 'num' }, { t: 'Unid. por caja', w: 10, tipo: 'num' },
+            { t: 'Cód. barras unidad', w: 18 }, { t: 'Cód. barras paquete', w: 18 }, { t: 'Cód. barras caja', w: 18 },
+            { t: 'Caja ancho (cm)', w: 10, tipo: 'num' }, { t: 'Caja alto (cm)', w: 10, tipo: 'num' }, { t: 'Caja profundidad (cm)', w: 12, tipo: 'num' },
+            { t: 'Volumen caja (m³)', w: 12, tipo: 'num' }, { t: 'Descripción', w: 40 }, { t: 'Características', w: 50 }, { t: 'Ficha técnica', w: 30 },
+            { t: 'Imagen (ruta)', w: 32 }, { t: 'Estado', w: 10 }],
+          filas: lista2.map(p => {
+            const vol = n0(p.caja_ancho_cm) * n0(p.caja_alto_cm) * n0(p.caja_prof_cm) / 1e6;
+            return [txt(p.codigo), txt(p.nombre), c.nombreMarca(p.marca_id), c.rutaCategoria(p.categoria_id), usosDe(p).map(c.nombreUso).join(', '),
+              txt(p.unidad), numX(p.unidades_por_paquete), numX(p.unidades_por_caja),
+              txt(p.codigo_barras_unidad), txt(p.codigo_barras_paquete), txt(p.codigo_barras_caja),
+              numX(p.caja_ancho_cm), numX(p.caja_alto_cm), numX(p.caja_prof_cm), vol ? redondear(vol, 6) : '',
+              txt(p.descripcion), txt(p.caracteristicas), txt(p.ficha_tecnica_url), txt(p.imagen_principal_url), p.estado === 'INACTIVO' ? 'INACTIVO' : 'ACTIVO'];
+          })
+        }]);
+        App.aviso('Excel descargado: ' + lista2.length + ' producto(s)', 'ok');
+      } }]
+    });
+  }
+
+  /** Hoja "productos de una sucursal". */
+  function hojaSucursal(items, c, empresa, suc, filtrado) {
+    const costos = veCostos();
+    const columnas = [{ t: 'Empresa', w: 16 }, { t: 'Sucursal', w: 16 }, { t: 'Código', w: 12 }, { t: 'Nombre', w: 40 }, { t: 'Marca', w: 16 },
+      { t: 'Categoría', w: 24 }, { t: 'Usos / profesiones', w: 24 }, { t: 'Unidad', w: 9 }, { t: 'Ubicación', w: 16 },
+      { t: 'Stock (unidades)', w: 11, tipo: 'num' }, { t: 'Stock en cajas', w: 16 }, { t: 'Stock mínimo', w: 10, tipo: 'num' }, { t: 'Situación', w: 12 },
+      { t: 'Último ingreso', w: 12 }, { t: 'Nuevo stock', w: 9 }, { t: 'Producto especial', w: 10 }]
+      .concat(costos ? [{ t: 'Precio de adquisición', w: 13, tipo: 'bs' }] : [])
+      .concat([{ t: 'Precio unidad', w: 12, tipo: 'bs' }, { t: 'Precio mayor', w: 12, tipo: 'bs' }, { t: 'Mayor desde (u)', w: 10, tipo: 'num' },
+        { t: 'Caja cerrada (por unidad)', w: 13, tipo: 'bs' }, { t: 'Total caja cerrada', w: 13, tipo: 'bs' }])
+      .concat(costos ? [{ t: 'Valor del inventario', w: 14, tipo: 'bs' }] : []).concat([{ t: 'Estado', w: 12 }]);
+    let valor = 0;
+    const lista2 = items.slice().sort((a, b) => porNombre(a.p, b.p));
+    const filas = lista2.map(i => {
+      const p = i.p, ps = i.ps, upc = n0(p.unidades_por_caja);
+      const v = Math.max(i.stock, 0) * n0(ps.costo_promedio);
+      valor += v;
+      const situacion = !i.activo ? 'Desasignado' : i.cero ? 'Sin stock' : i.bajo ? 'Stock bajo' : 'OK';
+      return [empresa, suc.nombre, txt(p.codigo), txt(p.nombre), c.nombreMarca(p.marca_id), c.rutaCategoria(p.categoria_id),
+        usosDe(p).map(c.nombreUso).join(', '), txt(p.unidad), txt(ps.ubicacion), i.stock, upc > 1 ? (textoStock(i.stock, p).split(' · ')[1] || '') : '',
+        numX(ps.stock_minimo), situacion, fechaX(i.ingreso), i.nuevo ? 'Sí' : '', ps.producto_especial === 'SI' ? 'SI' : 'NO']
+        .concat(costos ? [n0(ps.costo_promedio) ? redondear(n0(ps.costo_promedio), 4) : ''] : [])
+        .concat([numX(ps.precio_unidad), numX(ps.precio_mayor), numX(ps.cantidad_min_mayor),
+          n0(ps.precio_caja) ? redondear(n0(ps.precio_caja) / (upc > 1 ? upc : 1), 4) : '', numX(ps.precio_caja)])
+        .concat(costos ? [redondear(v, 2)] : []).concat([i.activo ? 'Asignado' : 'Desasignado']);
+    });
+    const totales = columnas.map(() => null);
+    totales[0] = 'TOTAL';
+    totales[3] = lista2.length + ' producto(s)';
+    if (costos) totales[columnas.length - 2] = redondear(valor, 2);
+    return { nombre: suc.nombre, titulo: 'Productos · ' + empresa + ' · ' + suc.nombre,
+      subtitulo: fechaHoy() + ' · ' + lista2.length + ' producto(s)' + (filtrado ? ' (con los filtros de la pantalla)' : '') + ' · stock en unidades, precios en Bs',
+      columnas: columnas, filas: filas, totales: totales };
+  }
+
+  /** Hoja "stock de toda la empresa": una columna por sucursal. */
+  async function hojaStockEmpresa(sucs, c, empresa) {
+    const st = await stocks();
+    const todasPS = await Datos.listar('PRODUCTOS_SUCURSAL', x => activo(x) && sucs.some(s => mismo(s.id, x.sucursal_id)));
+    const asignado = new Set(todasPS.map(x => x.sucursal_id + '|' + x.producto_id));
+    const productos = Array.from(new Set(todasPS.map(x => String(x.producto_id)))).map(id => c.porId.get(id)).filter(Boolean).sort(porNombre);
+    const sumas = sucs.map(() => 0);
+    let total = 0;
+    const filas = productos.map(p => {
+      let t = 0;
+      const porSuc = sucs.map((s, i) => {
+        if (!asignado.has(s.id + '|' + p.id)) return '';
+        const v = st.get(s.id + '|' + p.id) || 0;
+        t += v; sumas[i] += v;
+        return v;
+      });
+      total += t;
+      return [txt(p.codigo), txt(p.nombre), c.nombreMarca(p.marca_id), txt(p.unidad)].concat(porSuc, [redondear(t, 3)]);
+    });
+    return { nombre: 'Stock empresa', titulo: 'Stock de toda la empresa · ' + empresa,
+      subtitulo: fechaHoy() + ' · ' + productos.length + ' producto(s) · en unidades · vacío = no asignado en esa sucursal',
+      columnas: [{ t: 'Código', w: 12 }, { t: 'Nombre', w: 40 }, { t: 'Marca', w: 16 }, { t: 'Unidad', w: 9 }]
+        .concat(sucs.map(s => ({ t: s.nombre + (s.es_central === 'SI' ? ' (central)' : ''), w: 14, tipo: 'num' })), [{ t: 'TOTAL', w: 12, tipo: 'num' }]),
+      filas: filas, totales: ['TOTAL', productos.length + ' producto(s)', null, null].concat(sumas.map(v => redondear(v, 3)), [redondear(total, 3)]) };
+  }
+
+  async function exportarSucursal(suc, alcance) {
+    const c = await cargar();
+    const sucs = alcance.sucursales.filter(x => mismo(x.empresa_id, suc.empresa_id));
+    const empresa = (alcance.empresas.find(e => mismo(e.id, suc.empresa_id)) || App.contexto.empresa || {}).nombre || '';
+    const vista = mismo(ultimaVistaPS.sucId, suc.id) ? ultimaVistaPS.items : [];
+    const nAsig = (await itemsSucursal(suc.id)).filter(i => i.activo).length;
+    App.modal({
+      titulo: 'Exportar a Excel',
+      html: '<div class="checks" style="grid-template-columns:1fr">' +
+        '<label class="check"><input type="checkbox" id="xSuc" checked><span><b>Productos de ' + esc(suc.nombre) + '</b>' +
+        '<small>Stock, mínimo, situación, precios y valor del inventario</small></span></label>' +
+        '<div class="x-sub"><label class="check chico"><input type="radio" name="xAlc" value="VISTA"' + (vista.length ? ' checked' : ' disabled') + '><span>Lo que estoy viendo (' + vista.length + ')</span></label>' +
+        '<label class="check chico"><input type="radio" name="xAlc" value="TODO"' + (vista.length ? '' : ' checked') + '><span>Todos los asignados (' + nAsig + ')</span></label></div>' +
+        (sucs.length > 1 ? '<label class="check"><input type="checkbox" id="xTodas"><span><b>Productos de todas las sucursales (' + sucs.length + ')</b>' +
+          '<small>Una hoja por sucursal, en el mismo archivo</small></span></label>' +
+          '<label class="check"><input type="checkbox" id="xStock"><span><b>Stock de toda la empresa</b>' +
+          '<small>Una fila por producto y una columna de stock por sucursal, con el total</small></span></label>' : '') +
+        '</div><div class="f-msg"></div>',
+      botones: [{ t: 'Cancelar' }, { t: 'Descargar Excel', clase: 'btn-principal', accion: async m => {
+        try {
+          const chk = id => !!$('#' + id, m) && $('#' + id, m).checked;
+          if (!chk('xSuc') && !chk('xTodas') && !chk('xStock')) return mensaje(m, 'Marque qué quiere exportar.');
+          App.cargando('Preparando el Excel…');
+          const hojas = [];
+          if (chk('xSuc') && !chk('xTodas')) {
+            const soloVista = $('input[name="xAlc"]:checked', m).value === 'VISTA';
+            hojas.push(hojaSucursal(soloVista ? vista : (await itemsSucursal(suc.id)).filter(i => i.activo), c, empresa, suc, soloVista));
+          }
+          if (chk('xTodas')) {
+            for (const s of sucs) hojas.push(hojaSucursal((await itemsSucursal(s.id)).filter(i => i.activo), c, empresa, s, false));
+          }
+          if (chk('xStock')) hojas.push(await hojaStockEmpresa(sucs, c, empresa));
+          const nombre = 'Productos_' + Excel.nombreArchivo(chk('xTodas') || (chk('xStock') && !chk('xSuc')) ? empresa : suc.nombre) + '_' + fechaArchivo() + '.xlsx';
+          Excel.descargar(nombre, hojas);
+          App.cargando(null);
+          App.aviso('Excel descargado: ' + nombre, 'ok');
+          return true;
+        } catch (err) {
+          App.cargando(null);
+          console.error(err);
+          return mensaje(m, err.message || String(err));
+        }
+      } }]
+    });
   }
 
   // ---------- Imprimir lista de productos (PDF, tamaño carta) ----------
@@ -2114,7 +2360,8 @@
   // ============================================================
   //  PANTALLA: BUSCAR PRODUCTO Y STOCK (todos los roles)
   // ============================================================
-  const fBus = { q: '', todo: false, limite: 30, categoria: '', marca: '', uso: '' };
+  const fBus = { q: '', todo: false, limite: 30, categoria: '', marca: '', uso: '', orden: 'AUTO' };
+  const ORDEN_BUS = [['AUTO', 'Automático'], ['MAS', 'Más stock primero'], ['MENOS', 'Menos stock primero'], ['NUEVO', 'Nuevo stock primero'], ['NOMBRE', 'Nombre (A-Z)']];
 
   App.pantalla('buscar', {
     refrescar: true,
@@ -2125,6 +2372,8 @@
       const c = await cargar();
       const asignados = suc ? new Map((await Datos.listar('PRODUCTOS_SUCURSAL', x => mismo(x.sucursal_id, suc.id))).map(x => [String(x.producto_id), x])) : new Map();
       const stock = suc ? await stocks(suc.id) : new Map();
+      const ing = suc ? await ingresos(suc.id) : new Map();
+      const diasNuevo = await diasNuevoStock();
       const todo = !suc || fBus.todo;
 
       raiz.innerHTML =
@@ -2136,6 +2385,7 @@
         '<div class="filtros">' +
         '<div class="campo corto"><label for="bCat">Categoría</label>' + lista('bCat', [['', 'Todas']].concat(arbolCategorias(c).map(x => [x[0], x[1]])), fBus.categoria) + '</div>' +
         '<div class="campo corto"><label for="bUso">Uso / profesión</label>' + lista('bUso', opcionesUsos(c), fBus.uso) + '</div>' +
+        (suc ? '<div class="campo corto"><label for="bOrden">Ordenar</label>' + lista('bOrden', ORDEN_BUS, fBus.orden) + '</div>' : '') +
         (fBus.categoria || fBus.uso ? '<button class="btn btn-borde" data-acc="limpiar">Quitar filtros</button>' : '') + '</div>' +
         (suc ? '<label class="check chico" style="margin:-4px 0 14px"><input type="checkbox" id="bTodo"' + (fBus.todo ? ' checked' : '') + '>' +
           '<span>Incluir productos del catálogo que no están en esta sucursal</span></label>' : '') +
@@ -2146,20 +2396,27 @@
       const pintar = async () => {
         const cont = $('#bRes', raiz);
         const hayFiltro = fBus.categoria || fBus.uso;
-        if (!txt(fBus.q) && !hayFiltro) {
+        if (!txt(fBus.q) && !hayFiltro && !suc) {
           cont.innerHTML = '<div class="tarjeta vacio">' + ico('search') + '<p><b>¿Qué producto busca?</b><br>Puede escribir parte del nombre en cualquier orden ' +
             '(ej. <i>clavo 2</i>), el código interno o el código de barras.</p>' +
             (Escaner.soportado() ? '' : '<p class="nota">En este navegador la cámara no lee códigos: use un lector USB o escriba el código.</p>') + '</div>';
           return;
         }
         const ids = todo ? null : new Set(Array.from(asignados.values()).filter(activo).map(x => String(x.producto_id)));
-        const lista2 = await buscar(fBus.q, { ids: ids, uso: fBus.uso, categorias: fBus.categoria ? descendientes(c, fBus.categoria) : null });
+        let lista2 = await buscar(fBus.q, { ids: ids, uso: fBus.uso, categorias: fBus.categoria ? descendientes(c, fBus.categoria) : null });
+        // Orden: "Automático" = por relevancia si se escribió algo; si no, más stock primero
+        const orden = fBus.orden === 'AUTO' ? (txt(fBus.q) ? '' : 'MAS') : fBus.orden;
+        const st = p => activo(asignados.get(String(p.id))) ? (stock.get(String(p.id)) || 0) : -Infinity;
+        const fi = p => { const f = ing.get(String(p.id)); return esNuevo(f, diasNuevo) ? Date.parse(f) : 0; };
+        const cmp = { MAS: (a, b) => st(b) - st(a) || porNombre(a, b), MENOS: (a, b) => (st(a) === -Infinity) - (st(b) === -Infinity) || st(a) - st(b) || porNombre(a, b),
+          NUEVO: (a, b) => fi(b) - fi(a) || porNombre(a, b), NOMBRE: porNombre }[orden];
+        if (cmp) lista2 = lista2.slice().sort(cmp);
         if (!lista2.length) {
           const cod = codigoLimpio(fBus.q);
           cont.innerHTML = vacio('search', (txt(fBus.q) ? 'No se encontró «' + esc(fBus.q) + '»' : 'Ningún producto con esos filtros') +
             (hayFiltro && txt(fBus.q) ? ' con los filtros elegidos' : '') + (todo ? '.' : ' en esta sucursal.'),
             (!todo ? '<button class="btn btn-borde" data-acc="todo" style="margin-top:12px">Buscar en todo el catálogo</button> ' : '') +
-            (esAG() && cod && !/\s/.test(txt(fBus.q)) ? '<button class="btn btn-principal" data-acc="crear" data-cod="' + esc(cod) + '" style="margin-top:12px">' +
+            (editaCatalogo() && cod && !/\s/.test(txt(fBus.q)) ? '<button class="btn btn-principal" data-acc="crear" data-cod="' + esc(cod) + '" style="margin-top:12px">' +
               icoX('mas') + 'Crear producto con este código</button>' : ''));
           return;
         }
@@ -2171,7 +2428,8 @@
           const min = asig ? n0(ps.stock_minimo) : 0;
           const clase = !asig ? 'gris' : s <= 0 ? 'roja' : min > 0 && s <= min ? 'amarilla' : 'verde';
           return '<button class="prod-tarjeta" data-acc="ver" data-id="' + esc(p.id) + '">' + miniatura(p, c, 'grande') +
-            '<span class="prod-info"><b>' + esc(p.nombre) + '</b><small>' + esc([p.codigo, c.nombreMarca(p.marca_id)].filter(Boolean).join(' · ')) + '</small>' +
+            '<span class="prod-info"><b>' + esc(p.nombre) + (asig && esNuevo(ing.get(String(p.id)), diasNuevo) ? ETQ_NUEVO : '') + '</b>' +
+            '<small>' + esc([p.codigo, c.nombreMarca(p.marca_id)].filter(Boolean).join(' · ')) + '</small>' +
             (asig && txt(ps.ubicacion) ? '<small>📍 ' + esc(ps.ubicacion) + '</small>' : '') +
             (asig ? '<span class="prod-precios">' + (n0(ps.precio_unidad) ? '<span>Unidad <b>' + U.bs(ps.precio_unidad) + '</b></span>' : '<span class="suave">Sin precio</span>') +
               (n0(ps.precio_mayor) ? '<span>Mayor <b>' + U.bs(ps.precio_mayor) + '</b>' + (n0(ps.cantidad_min_mayor) ? ' (' + fmt(ps.cantidad_min_mayor) + '+)' : '') + '</span>' : '') +
@@ -2183,8 +2441,9 @@
           (lista2.length > mostrar.length ? '<div class="mas-centro"><button class="btn btn-borde" data-acc="mas">Mostrar más (' + (lista2.length - mostrar.length) + ')</button></div>'
             : '<p class="nota" style="margin-top:10px">' + lista2.length + ' producto(s).</p>');
       };
-      [['bCat', 'categoria'], ['bUso', 'uso']].forEach(([id, k]) => {
-        $('#' + id, raiz).onchange = e => { fBus[k] = e.target.value; fBus.limite = 30; App.refrescarContexto(); };
+      [['bCat', 'categoria'], ['bUso', 'uso'], ['bOrden', 'orden']].forEach(([id, k]) => {
+        const sel = $('#' + id, raiz);
+        if (sel) sel.onchange = e => { fBus[k] = e.target.value; fBus.limite = 30; App.refrescarContexto(); };
       });
       await pintar();
       restaurarFoco(raiz);
@@ -2230,6 +2489,7 @@
     const ps = suc ? todosPS.find(x => mismo(x.sucursal_id, suc.id)) : null;
     const asig = activo(ps);
     const st = await stocks();
+    const nuevoAqui = suc ? esNuevo((await ingresos(suc.id)).get(String(p.id)), await diasNuevoStock()) : false;
     const upc = n0(p.unidades_por_caja), upp = n0(p.unidades_por_paquete);
     let imgs = [p.imagen_principal_url].concat((c.imagenes.get(String(p.id)) || []).map(i => i.url)).map(v => urlDe(v, c)).filter(Boolean);
     if (!imgs.length && imagenDe(p, c)) imgs = [imagenDe(p, c)];
@@ -2259,7 +2519,8 @@
       '<p class="ficha-sub">' + esc([p.codigo, c.nombreMarca(p.marca_id), c.rutaCategoria(p.categoria_id)].filter(Boolean).join(' · ')) +
       (activo(p) ? '' : ' <span class="etiqueta roja">Inactivo</span>') + '</p>' +
       (usosDe(p).length ? '<p class="ficha-sub" style="margin-top:-6px">' + usosDe(p).map(u => '<span class="etiqueta uso">' + esc(c.nombreUso(u)) + '</span>').join(' ') + '</p>' : '') +
-      (suc ? '<div class="ficha-stock ' + (!asig ? 'gris' : (st.get(suc.id + '|' + p.id) || 0) <= 0 ? 'roja' : '') + '"><span>Stock en ' + esc(suc.nombre) + '</span>' +
+      (suc ? '<div class="ficha-stock ' + (!asig ? 'gris' : (st.get(suc.id + '|' + p.id) || 0) <= 0 ? 'roja' : '') + '"><span>Stock en ' + esc(suc.nombre) +
+        (asig && nuevoAqui ? ETQ_NUEVO : '') + '</span>' +
         '<b>' + (asig ? esc(textoStock(st.get(suc.id + '|' + p.id) || 0, p)) : 'No asignado') + '</b>' +
         (asig && txt(ps.ubicacion) ? '<small>📍 ' + esc(ps.ubicacion) + '</small>' : '') + '</div>' : '') +
       (asig ? '<div class="ficha-precios">' +
@@ -2282,10 +2543,13 @@
       (upc ? '<div class="dato"><span>Caja</span><b>' + fmt(upc) + ' ' + esc(p.unidad || 'u') + '</b></div>' : '') +
       (vol ? '<div class="dato"><span>Medidas caja</span><b>' + fmt(p.caja_ancho_cm) + '×' + fmt(p.caja_alto_cm) + '×' + fmt(p.caja_prof_cm) + ' cm (' + fmt(vol, 4) + ' m³)</b></div>' : '') +
       '</div></div>' +
-      (txt(p.descripcion) ? '<p class="ficha-desc">' + esc(p.descripcion) + '</p>' : '');
+      (txt(p.descripcion) ? '<p class="ficha-desc">' + esc(p.descripcion) + '</p>' : '') +
+      (txt(p.caracteristicas) ? '<div class="tarjeta" style="margin-top:14px"><h3>' + icoX('etiqueta') + 'Características</h3>' + caracteristicasHtml(p.caracteristicas) + '</div>' : '') +
+      (esUrl(p.ficha_tecnica_url) ? '<p style="margin:12px 0 0"><a class="btn btn-borde" href="' + esc(p.ficha_tecnica_url) + '" target="_blank" rel="noopener">' +
+        ico('file') + 'Ver ficha técnica</a></p>' : '');
 
     const botones = [];
-    if (esAG()) botones.push({ t: 'Editar en catálogo', clase: 'btn-borde', accion: () => { formProducto(p); } });
+    if (puedeModificar(p, c)) botones.push({ t: 'Editar en catálogo', clase: 'btn-borde', accion: () => { formProducto(p); } });
     if (suc && manejaSucursal() && activo(p)) {
       botones.push(asig
         ? { t: 'Editar en la sucursal', clase: 'btn-borde', accion: () => { formPS(ps, p); } }
