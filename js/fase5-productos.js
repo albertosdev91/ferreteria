@@ -1508,6 +1508,7 @@
       html: html,
       botones: [{ t: 'Cancelar' }, { t: 'Guardar', clase: 'btn-principal', accion: m => guardarPS(m, ps, p, { suc: suc, precios: precios, costoEditable: costoEditable, stock: stock, puedeInicial: puedeInicial }) }]
     });
+        window.dispatchEvent(new CustomEvent('ferreteria:form-ps', { detail: { modal: f, ps: ps, producto: p, sucursal: suc, stock: stock } }));
 
     // Ganancia en vivo
     const ganancia = (precioUnidad, costo) => {
