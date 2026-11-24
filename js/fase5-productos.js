@@ -51,9 +51,8 @@
   const veCostos = () => rol() !== VEN;
   const editaPrecios = () => rol() === AG || rol() === ADM;
   const manejaSucursal = () => [AG, ADM, ALM].indexOf(rol()) >= 0;
-  const editaCatalogo = () => rol() === AG || rol() === ADM;      // AG: todo · ADMINISTRADOR: agrega y modifica lo de su empresa
-  /** ¿Puede modificar este producto / marca / categoría? AG siempre; ADMINISTRADOR solo si lo creó alguien de su empresa. */
-  const puedeModificar = (x, c) => esAG() || (rol() === ADM && !!x && !!c && c.misUsuarios.has(String(x.creado_por)));
+  const editaCatalogo = () => rol() === AG || rol() === ADM;      // Catálogo general: AG y ADMINISTRADOR, sin restricción
+  const puedeModificar = () => editaCatalogo();
   const porNombre = (a, b) => txt(a.nombre).localeCompare(txt(b.nombre), 'es');
   const precio = v => n0(v) > 0 ? U.bs(v) : '<span class="suave">—</span>';
   /** Usos / profesiones de un producto (columna "usos": códigos separados por coma). */
@@ -193,8 +192,6 @@
       Datos.listar('PRODUCTOS'), Datos.listar('MARCAS'), Datos.listar('CATEGORIAS'), Datos.listar('PRODUCTO_IMAGENES', activo),
       Datos.listar('ARCHIVOS', activo), Datos.listar('LISTAS', l => l.lista === 'USO')
     ]);
-    const miEmpresa = Sesion.actual ? String(Sesion.actual.empresa_id || '') : '';
-    const misUsuarios = new Set(miEmpresa ? (await Datos.listar('USUARIOS', u => mismo(u.empresa_id, miEmpresa))).map(u => String(u.id)) : []);
     usosLista.sort((a, b) => n0(a.orden) - n0(b.orden) || txt(a.nombre).localeCompare(txt(b.nombre), 'es'));
     const usoPorCod = new Map(usosLista.map(u => [String(u.codigo), u]));
     productos.sort((a, b) => (a.estado === 'INACTIVO') - (b.estado === 'INACTIVO') || porNombre(a, b));
@@ -236,7 +233,6 @@
       productos: productos, porId: porId, marcas: marcas, categorias: categorias, marcaPorId: marcaPorId, catPorId: catPorId,
       codigos: codigos, internos: internos, texto: texto, indice: indice, imagenes: imgs, rutas: rutas, rutaCategoria: rutaCategoria,
       nombreMarca: id => { const m = marcaPorId.get(String(id)); return m ? m.nombre : ''; },
-      misUsuarios: misUsuarios,
       usos: usosLista, nombreUso: cod => { const u = usoPorCod.get(String(cod)); return u ? u.nombre : cod; }
     };
     return cache;
@@ -336,8 +332,11 @@
     });
     return m;
   }
-  async function diasNuevoStock() {
-    const n = parseInt(await Datos.config('dias_nuevo_stock', '7'), 10);
+  /** Días de "Nuevo stock": primero los de la empresa (dias_nuevo_stock:<empresa_id>), si no el general, si no 7. */
+  async function diasNuevoStock(empresaId) {
+    if (!empresaId && App.contexto.empresa) empresaId = App.contexto.empresa.id;
+    const general = await Datos.config('dias_nuevo_stock', '7');
+    const n = parseInt(empresaId ? await Datos.config('dias_nuevo_stock:' + empresaId, general) : general, 10);
     return isFinite(n) && n >= 0 ? n : 7;
   }
   const esNuevo = (fecha, dias) => !!fecha && dias > 0 && Date.now() - Date.parse(fecha) <= dias * 86400000;
@@ -520,7 +519,7 @@
 
       raiz.innerHTML =
         '<div class="titulo"><div><h1>Catálogo general</h1><p>Lista única de productos para todas las empresas. ' +
-        nActivos + ' producto(s) activo(s).' + (esAG() ? '' : ' Puede agregar productos y modificar los que creó su empresa; los demás son de solo lectura.') + '</p></div>' +
+        nActivos + ' producto(s) activo(s).</p></div>' +
         '<div class="acciones-fila"><button class="btn btn-borde" data-acc="categorias">' + icoX('etiqueta') + 'Categorías</button>' +
         '<button class="btn btn-borde" data-acc="marcas">' + icoX('etiqueta') + 'Marcas</button>' +
         (esAG() ? '<button class="btn btn-borde" data-acc="unidades">' + icoX('etiqueta') + 'Unidades</button>' +
@@ -723,8 +722,11 @@
       campo('pBarCaja', 'De la caja', p.codigo_barras_caja, { attrs: ' data-barras autocomplete="off" spellcheck="false"' }) +
 
       '<div class="seccion-form">Empaque</div>' +
-      campoNum('pUPaq', 'Unidades por paquete', p.unidades_por_paquete, { ph: 'Ej. 12', ayuda: 'Vacío si no se vende en paquete.' }) +
-      campoNum('pUCaja', 'Unidades por caja', p.unidades_por_caja, { ph: 'Ej. 100', ayuda: 'Vacío si no viene en caja.' }) +
+      (!nuevo ? '<div class="campo todo"><label class="check aviso-check"><input type="checkbox" id="pDesbloq"><span><b>Cambiar unidades por paquete o por caja</b>' +
+        '<small>Cuidado: cambia cómo se cuentan las cajas del stock y el precio por unidad de la caja cerrada en todas las sucursales. ' +
+        'Úselo solo para corregir un error.</small></span></label></div>' : '') +
+      campoNum('pUPaq', 'Unidades por paquete', p.unidades_por_paquete, { ph: 'Ej. 12', ayuda: 'Vacío si no se vende en paquete.', attrs: nuevo ? '' : ' readonly' }) +
+      campoNum('pUCaja', 'Unidades por caja', p.unidades_por_caja, { ph: 'Ej. 100', ayuda: 'Vacío si no viene en caja.', attrs: nuevo ? '' : ' readonly' }) +
       '<div class="campo todo"><label>Medidas de la caja (cm)</label><div class="tres">' +
       '<input class="entrada" id="pAncho" inputmode="decimal" placeholder="Ancho" aria-label="Ancho en cm" value="' + esc(fmtNum(p.caja_ancho_cm)) + '">' +
       '<input class="entrada" id="pAlto" inputmode="decimal" placeholder="Alto" aria-label="Alto en cm" value="' + esc(fmtNum(p.caja_alto_cm)) + '">' +
@@ -839,6 +841,12 @@
       const u = urlDe(ev.target.value);
       $('.mini', fila).innerHTML = u ? '<img src="' + esc(u) + '" alt="" onerror="this.remove()">' : '';
     });
+    // Unidades por paquete / caja: al editar, solo con la casilla marcada
+    const desbloq = $('#pDesbloq', f);
+    if (desbloq) desbloq.onchange = () => {
+      ['pUPaq', 'pUCaja'].forEach(id => { const i = $('#' + id, f); i.readOnly = !desbloq.checked; if (!desbloq.checked) i.value = fmtNum(p[id === 'pUPaq' ? 'unidades_por_paquete' : 'unidades_por_caja']); });
+      if (desbloq.checked) $('#pUPaq', f).focus();
+    };
     // Vista previa de las características
     const vistaCarac = () => { $('#pCaracVista', f).innerHTML = caracteristicasHtml($('#pCarac', f).value); };
     $('#pCarac', f).oninput = vistaCarac;
@@ -1212,7 +1220,8 @@
     const filas = await Datos.listar('PRODUCTOS_SUCURSAL', x => mismo(x.sucursal_id, sucursalId));
     const stock = await stocks(sucursalId);
     const ing = await ingresos(sucursalId);
-    const dias = await diasNuevoStock();
+    const sucX = await Datos.obtener('SUCURSALES', sucursalId);
+    const dias = await diasNuevoStock(sucX && sucX.empresa_id);
     return filas.map(ps => {
       const p = c.porId.get(String(ps.producto_id));
       if (!p) return null;
@@ -1270,7 +1279,7 @@
       const act = items.filter(i => i.activo);
       const pend = await pendientesDe('PRODUCTOS_SUCURSAL');
       const valor = act.reduce((t, i) => t + Math.max(i.stock, 0) * n0(i.ps.costo_promedio), 0);
-      const diasNuevo = await diasNuevoStock();
+      const diasNuevo = await diasNuevoStock(suc.empresa_id);
       const cuenta = { NUEVO: act.filter(i => i.nuevo).length, BAJO: act.filter(i => i.bajo).length, CERO: act.filter(i => i.cero).length, ESPECIAL: act.filter(i => i.especial).length };
 
       const tile = (vista, titulo, cifra, clase) => '<button class="tarjeta tile' + (fPS.vista === vista ? ' elegida' : '') + '" data-vista="' + vista + '">' +
@@ -1295,7 +1304,7 @@
         (veCostos() ? '<div class="tarjeta tile"><span>Valor del inventario (al costo)</span><b class="cifra chica">' + U.bs(valor) + '</b></div>' : '') +
         '</div>' +
         '<p class="nota">"Nuevo stock" se muestra ' + (diasNuevo ? diasNuevo + ' día(s)' : '(desactivado)') + ' después de cada ingreso de mercadería (compra, inventario inicial o traspaso recibido).' +
-        (esAG() ? ' <a href="#" data-acc="dias">Cambiar días</a>' : '') + '</p>' +
+        (editaPrecios() ? ' <a href="#" data-acc="dias">Cambiar días</a>' : '') + '</p>' +
         '<div class="filtros">' +
         '<div class="campo"><label for="psBuscar">Buscar <small class="suave">(también ubicación · después de una coma: marca)</small></label>' +
         '<input class="entrada" id="psBuscar" data-foco value="' + esc(fPS.buscar) + '" autocomplete="off" enterkeyhint="search" placeholder="Ej. clavo 2, truper"></div>' +
@@ -1395,7 +1404,7 @@
           case 'copiar': return esAG() ? copiarDeSucursal(suc, alcance) : null;
           case 'imprimir': return editaPrecios() ? imprimirLista(suc) : null;
           case 'exportar': return exportarSucursal(suc, alcance);
-          case 'dias': ev.preventDefault(); return esAG() ? cambiarDiasNuevo() : null;
+          case 'dias': ev.preventDefault(); return editaPrecios() ? cambiarDiasNuevo(suc.empresa_id, nombreEmpresa(alcance, suc.empresa_id)) : null;
           case 'mas': fPS.limite += 100; return pintar();
           case 'editar': {
             const i = items.find(x => mismo(x.ps.id, b.dataset.id));
@@ -1970,18 +1979,20 @@
     }
   }
 
-  /** Cuántos días se muestra "Nuevo stock" (CONFIG dias_nuevo_stock; solo administrador general). */
-  async function cambiarDiasNuevo() {
-    const actual = await diasNuevoStock();
+  /** Cuántos días se muestra "Nuevo stock" en una empresa (CONFIG dias_nuevo_stock:<empresa_id>; AG o ADMINISTRADOR). */
+  async function cambiarDiasNuevo(empresaId, nombreEmp) {
+    const actual = await diasNuevoStock(empresaId);
     App.modal({
-      titulo: 'Aviso "Nuevo stock"',
+      titulo: 'Aviso "Nuevo stock"' + (nombreEmp ? ' · ' + nombreEmp : ''),
       html: '<p class="nota">Después de cada ingreso de mercadería (compra, inventario inicial o traspaso recibido) el producto muestra ' +
-        '<span class="etiqueta nuevo">Nuevo stock</span> durante estos días, en todas las empresas y sucursales. Ajustes y ediciones no cuentan.</p>' +
+        '<span class="etiqueta nuevo">Nuevo stock</span> durante estos días en todas las sucursales de ' + esc(nombreEmp || 'la empresa') +
+        '. Ajustes y ediciones no cuentan.</p>' +
         campoNum('kDias', 'Días', actual, { ayuda: '0 = no mostrar el aviso.' }) + '<div class="f-msg"></div>',
       botones: [{ t: 'Cancelar' }, { t: 'Guardar', clase: 'btn-principal', accion: async m => {
         const v = txt($('#kDias', m).value);
         if (!/^\d{1,3}$/.test(v)) return mensaje(m, 'Escriba un número entero de días (0 a 999).');
-        await Datos.guardar('CONFIG', { clave: 'dias_nuevo_stock', valor: String(Number(v)), descripcion: 'Días que un producto muestra "Nuevo stock" después de un ingreso' });
+        await Datos.guardar('CONFIG', { clave: 'dias_nuevo_stock:' + empresaId, valor: String(Number(v)),
+          descripcion: 'Días de "Nuevo stock" para ' + (nombreEmp || empresaId) });
         App.aviso('Guardado: ' + Number(v) + ' día(s)', 'ok');
         await App.refrescarContexto();
       } }]
@@ -2373,7 +2384,7 @@
       const asignados = suc ? new Map((await Datos.listar('PRODUCTOS_SUCURSAL', x => mismo(x.sucursal_id, suc.id))).map(x => [String(x.producto_id), x])) : new Map();
       const stock = suc ? await stocks(suc.id) : new Map();
       const ing = suc ? await ingresos(suc.id) : new Map();
-      const diasNuevo = await diasNuevoStock();
+      const diasNuevo = await diasNuevoStock(suc && suc.empresa_id);
       const todo = !suc || fBus.todo;
 
       raiz.innerHTML =
@@ -2489,7 +2500,7 @@
     const ps = suc ? todosPS.find(x => mismo(x.sucursal_id, suc.id)) : null;
     const asig = activo(ps);
     const st = await stocks();
-    const nuevoAqui = suc ? esNuevo((await ingresos(suc.id)).get(String(p.id)), await diasNuevoStock()) : false;
+    const nuevoAqui = suc ? esNuevo((await ingresos(suc.id)).get(String(p.id)), await diasNuevoStock(suc.empresa_id)) : false;
     const upc = n0(p.unidades_por_caja), upp = n0(p.unidades_por_paquete);
     let imgs = [p.imagen_principal_url].concat((c.imagenes.get(String(p.id)) || []).map(i => i.url)).map(v => urlDe(v, c)).filter(Boolean);
     if (!imgs.length && imagenDe(p, c)) imgs = [imagenDe(p, c)];
