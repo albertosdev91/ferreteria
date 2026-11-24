@@ -4,12 +4,13 @@
  * Sin internet: usa la copia guardada.
  * Al publicar una fase nueva, cambie VERSION y agregue los archivos nuevos a ARCHIVOS.
  */
-const VERSION = 'ferreteria-v5.6.2';
+const VERSION = 'ferreteria-v6.0.0';
 const ARCHIVOS = [
   './',
   './index.html',
   './manifest.webmanifest',
   './css/app.css',
+  './css/fase6.css',
   './js/config.js',
   './js/db.js',
   './js/api.js',
@@ -20,6 +21,8 @@ const ARCHIVOS = [
   './js/escaner.js',
   './js/excel.js',
   './js/fase5-productos.js',
+  './js/fase6-almacen.js',
+  './js/fase6-importaciones.js',
   './icons/icon-192.png',
   './icons/icon-512.png',
   './icons/icon-maskable-512.png'
