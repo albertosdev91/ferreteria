@@ -14,7 +14,7 @@ window.CONFIG = {
   API_URL: 'https://script.google.com/macros/s/AKfycbyLewjDxEoYkzI26nK5FAaNfiNsJGbh2cyg64jb3qwkcx9EeMAAQaK5q4R6xExu1rri/exec',                       // ← PEGUE AQUÍ SU URL /exec
 
   NOMBRE_APP: 'Ferretería',
-  VERSION_APP: '5.5.1',
+  VERSION_APP: '5.6.0',
 
   SYNC_CADA_MINUTOS: 5,              // sincronización automática cuando hay internet
   SYNC_LOTE: 500,                    // registros por envío (la API acepta hasta 2000)
